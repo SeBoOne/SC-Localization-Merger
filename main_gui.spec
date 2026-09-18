@@ -14,6 +14,8 @@ block_cipher = None
 # Versteckte Imports für Module der App
 hiddenimports = [
     'merge',
+    'p4k_reader',
+    'extract_global',
     'version_detection',
     'Crypto',
     'Crypto.Cipher',
