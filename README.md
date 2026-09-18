@@ -27,7 +27,7 @@ Eine einzige ausführbare Datei, direkt per Doppelklick oder Terminal startbar:
 
 ```bash
 cd "Star Citizen Localization Merger"
-./dist/SC_GlobalIni_Merger
+./dist/SC-Localization-Merger
 ```
 
 - Eine Datei, statisch gebündelt via PyInstaller onefile (≈94&thinsp;MB inkl. Qt).
@@ -36,7 +36,7 @@ cd "Star Citizen Localization Merger"
 ### Windows
 
 1. Lade die neueste Version aus dem [Releases-Bereich](https://github.com/SeBoOne/SC-Localization-Merger/releases) herunter.
-2. Führe `SC_GlobalIni_Merger.exe` aus (One-File, keine Python-Installation nötig).
+2. Führe `SC-Localization-Merger.exe` aus (One-File, keine Python-Installation nötig).
 
 Der Windows-Build entsteht automatisch via GitHub-Actions, sobald ein Tag gesetzt wird
 (`git tag v1.0.0 && git push origin v1.0.0`).

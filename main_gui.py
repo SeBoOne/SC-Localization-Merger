@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SC global.ini Merger — PySide6 GUI.
+SC Localization Merger — PySide6 GUI.
 
 Zwei-Klick-Workflow:
   1. Kanal + Build auswaehlen (automatische Erkennung oder eigener Pfad).
@@ -191,11 +191,11 @@ QLabel#status {
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    """Hauptfenster des SC global.ini Merger."""
+    """Hauptfenster des SC Localization Merger."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("SC global.ini Merger")
+        self.setWindowTitle("SC Localization Merger")
         self.resize(620, 560)
         self.setMinimumSize(480, 400)
 

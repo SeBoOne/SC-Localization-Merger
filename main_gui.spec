@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller-Spec für SC_GlobalIni_Merger.
+PyInstaller-Spec für SC Localization Merger.
 Einzel-EXE, fensterlos (GUI), Windows/Linux-kompatibel.
 """
 
@@ -63,7 +63,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='SC_GlobalIni_Merger',
+    name='SC-Localization-Merger',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -36,8 +36,8 @@ jobs:
       - name: Build-Artefakt hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: SC_GlobalIni_Merger
-          path: dist/SC_GlobalIni_Merger.exe
+          name: SC-Localization-Merger
+          path: dist/SC-Localization-Merger.exe
 
       - name: Release-Asset anhängen
         uses: softprops/action-gh-release@v2
