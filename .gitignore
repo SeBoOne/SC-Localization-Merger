@@ -1,0 +1,37 @@
+# Python / virtuelle Umgebung
+.venv/
+__pycache__/
+*.pyc
+*.pyc.*
+.pytest_cache/
+.mypy_cache/
+
+# Tests (nicht eingecheckt, vgl. Projekt-Konvention)
+tests/
+
+# Output-Dateien der App
+Output/
+tmp_global_base.ini
+global.ini
+Data.p4k
+*.p4k
+
+# PyInstaller-Output
+build/
+dist/
+
+# Altlast (durch PyInstaller-Build bzw. merge.py ersetzt — nicht committen)
+SC_GlobalIni_Extractor.exe
+merge.ps1
+# Root-Kopien der Mod-Inis (kanonische Form in ini/, s. Konvention)
+/components.ini
+/contracts.ini
+/mining.ini
+/modified_ships.ini
+/ordnance.ini
+
+# Sonstiges
+*.spec.backup
+*.log
+.DS_Store
+Thumbs.db
