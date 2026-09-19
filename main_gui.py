@@ -677,11 +677,15 @@ class MainWindow(ctk.CTk):
             self._merge_btn.configure(state="normal")
 
     def _handle_error(self, msg: str, detail: bool = False):
-        """Fehlermeldung anzeigen + Status rot."""
-        self._set_status("Fehler!", error=True)
+        """Fehlermeldung in der Statusleiste zeigen + stderr loggen."""
         if detail:
-            msg = f"{msg}\n\n{traceback.format_exc()}"
-        messagebox.showerror(self, "Fehler", msg)
+            msg = f"{msg}\n{traceback.format_exc()}"
+        # Konkreten Fehlertext in die Statusleiste statt nur "Fehler!"
+        self._set_status(f"Fehler: {msg.splitlines()[0]}", error=True)
+        print(f"[SC-Merger] {msg}", file=sys.stderr)
+        # Popup nur bei detail (Stack-Trace) — bei Kurzmeldung reicht die Statusleiste
+        if detail:
+            messagebox.showerror(self, "Fehler", msg)
 
 
 # ---------------------------------------------------------------------------
