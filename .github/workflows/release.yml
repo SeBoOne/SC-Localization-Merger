@@ -9,6 +9,10 @@ on:
     types:
       - published
 
+# GITHUB_TOKEN braucht Schreibrechte, um das Release-Asset anzuhängen
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Windows-Build
