@@ -77,9 +77,12 @@ def merge(global_path: str, replacements: dict, out_path: str) -> tuple[int, int
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    # UTF-8 ohne BOM, wie von Set-Content UTF8
-    with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write("\n".join(lines_out) + "\n")
+    # Ausgabeformat = Format der funktionierenden Star-Citizen-global.ini:
+    # CRLF-Zeilenenden (\r\n) + UTF-8 mit BOM. Genau so legen die offiziellen
+    # Extraktoren/CIG-Workflows die Datei ab; ein LF/w/o-BOM-Output wird von
+    # SC nicht akzeptiert.
+    with open(out_path, "w", encoding="utf-8-sig", newline="") as fh:
+        fh.write("\r\n".join(lines_out) + "\r\n")
     return replaced, len(lines_out)
 
 
