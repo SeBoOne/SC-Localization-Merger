@@ -1,5 +1,9 @@
 # SC Localization Merger
 
+> ⚠️ **Dieses Tool wurde mit Hilfe von KI (AI) erstellt.**
+> Der Quellcode und alle zugehörigen Dateien wurden von einem AI-Agenten
+> generiert und von Hand gegen geprüft.
+
 Ein Python-GUI-Tool auf CustomTkinter (tkinter)-Basis zum Extrahieren der *Star Citizen* `global.ini` aus einer
 `Data.p4k` und zum Einmergen eigener Mod-Ini-Dateien zu einer gemeinsamen
 `Output/global.ini`.
@@ -35,12 +39,12 @@ Bestandteil). Eine gute Quelle für fertige, gepflegte Community-Übersetzungen 
 
 - Bietet eine **komplette** `global.ini`-Übersetzung sowie die **einzelnen Bestandteile**
   (z. B. Contracts, Items, Journal, Mining) als separate `.ini`-Dateien.
-- Wird bei jedem SC-Patch aktualisiert — **nach jedem Update auf einen neuen Build
-  prüfen** (im Readme steht „check for an update every patch").
 - Download im [Releases-Bereich](https://github.com/MrKraken/StarStrings/releases)
   (`StarStrings-LIVE.zip`, auseinandergezogen nach Bedarf in den `ini/`-Ordner).
-- Wenn du Teile verschiedener Übersetzungspacks kombinieren möchtest, ist zusätzlich
-  **[StarMeld](https://beltakoda.github.io/StarMeld/)** (webbasiert) hilfreich.
+
+Falls du kein zusätzliches Tool auf deinem PC installieren möchtest, kannst du stattdessen
+**[StarMeld](https://beltakoda.github.io/StarMeld/)** direkt im Browser nutzen — er macht
+dasselbe wie dieses Programm, nur rein webbasiert ohne Installation.
 
 > Hinweis: Diese Übersetzungen sind wie auch dieses Tool rein inoffizielle
 > Community-Projekte — nicht verbunden mit RSI/Cloud Imperium, Nutzung auf eigene Gefahr.
