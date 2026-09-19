@@ -1,18 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller-Spec für SC Localization Merger.
+PyInstaller-Spec für SC Localization Merger (CustomTkinter-GUI).
 Einzel-EXE, fensterlos (GUI), Windows/Linux-kompatibel.
 """
 
-import sys
-from pathlib import Path
-
 block_cipher = None
 
-# --- PySide6-Automatik: Hooks werden automatisch geladen ---
+from pathlib import Path
+import sys as _sys
+
+# --- CustomTkinter-Automatik: PyInstaller-Hooks laden tkinter & CustomTkinter ---
+# customtkinter hier explizit aufführen, damit alle Submodule (z.B. windows.widgets)
+# sicher gebündelt werden.
 
 # Versteckte Imports für Module der App
 hiddenimports = [
+    'customtkinter',
     'merge',
     'p4k_reader',
     'extract_global',
@@ -22,15 +25,20 @@ hiddenimports = [
     'Crypto',
     'Crypto.Cipher',
     'Crypto.Cipher.AES',
-    'PySide6',
-    'PySide6.QtCore',
-    'PySide6.QtGui',
-    'PySide6.QtWidgets',
-    'PySide6.QtNetwork',
 ]
 
-# --- Binärdateien: keine externen Binaries nötig ---
+# --- Binärdateien: keine externen Binaries nötig (außer tkinter-Systemlibs) ---
 binaries = []
+
+# Auf Linux liegen die tkinter-Systemlibs (libtcl9.0/libtcl9tk9.0) im Python-Ordner
+# ($base_prefix/lib). PyInstaller findet sie NICHT automatisch und das frozen Bundle
+# crasht sonst beim Start mit 'ImportError: libtcl9.0.so'. Deshalb explizit mitpacken.
+if _sys.platform != "win32":
+    _libdir = Path(_sys.base_prefix) / "lib"
+    for _name in ("libtcl9.0.so", "libtcl9tk9.0.so"):
+        _src = _libdir / _name
+        if _src.exists():
+            binaries.append((str(_src), "."))
 
 # --- Daten-Dateien: keine zusätzlichen Daten ---
 datas = []
@@ -46,7 +54,6 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter',
         'setuptools',
         'distutils',
     ],

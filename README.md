@@ -1,6 +1,6 @@
 # SC Localization Merger
 
-Ein Python/PySide6-GUI-Tool zum Extrahieren der *Star Citizen* `global.ini` aus einer
+Ein Python-GUI-Tool auf CustomTkinter (tkinter)-Basis zum Extrahieren der *Star Citizen* `global.ini` aus einer
 `Data.p4k` und zum Einmergen eigener Mod-Ini-Dateien zu einer gemeinsamen
 `Output/global.ini`.
 
@@ -40,7 +40,7 @@ nicht mehr im Programmverzeichnis, sondern im **App-Daten-Ordner** des Nutzers:
 
 ## Fertige Pakete (ohne Installation)
 
-Die gebündelte ausführbare Datei enthält alles (Python, Qt), keine Extra-Installation nötig.
+Die gebündelte ausführbare Datei enthält alles (Python, CustomTkinter/tkinter), keine Extra-Installation nötig.
 
 ### Linux
 
@@ -51,7 +51,7 @@ cd "Star Citizen Localization Merger"
 ./dist/SC-Localization-Merger
 ```
 
-- Eine Datei, statisch gebündelt via PyInstaller onefile (≈94&thinsp;MB inkl. Qt).
+- Eine Datei, statisch gebündelt via PyInstaller onefile (CustomTkinter/tkinter — deutlich kleiner als ein Qt-Build).
 - Kein venv, kein pip — einfach ausführbar.
 
 ### Windows
@@ -67,7 +67,7 @@ Der Windows-Build entsteht automatisch via GitHub-Actions, sobald ein Tag gesetz
 ```bash
 cd "Star Citizen Localization Merger"
 python3 -m venv .venv
-./.venv/bin/pip install PySide6 zstandard pycryptodome pyinstaller
+./.venv/bin/pip install customtkinter zstandard pycryptodome pyinstaller
 
 # GUI starten
 ./.venv/bin/python main_gui.py
@@ -78,7 +78,7 @@ python3 -m venv .venv
 
 ## Systemvoraussetzungen (Source-Ausführung)
 
-- **Python 3.11+**, **PySide6**, **zstandard**, **pycryptodome**.
+- **Python 3.11+** (mit **tkinter**/**Python-Tk**), **customtkinter**, **zstandard**, **pycryptodome**.
 
 ## Lizenz
 

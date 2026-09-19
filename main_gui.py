@@ -1,992 +1,678 @@
 #!/usr/bin/env python3
 """
-SC Localization Merger — PySide6 GUI.
+SC Localization Merger — CustomTkinter-GUI.
 
 Zwei-Klick-Workflow:
   1. Kanal + Build auswählen (automatische Erkennung oder eigener Pfad).
-  2. Mod-Dateien aus dem App-INI-Ordner an-/abwählen.
-  3. „Extract & Merge" → Output/global.ini im App-Datenordner.
+  2. Mod-Dateien aus dem App-INI-Ordner an-/abwählen (Drag & Drop / Datei-Dialog).
+  3. „Extract & Merge“ → Output/global.ini im App-Datenordner.
 
-Läuft auf Linux und Windows. Headless-fähig (QT_QPA_PLATFORM=offscreen).
+Läuft auf Linux, Windows und macOS. Design: dunkles Theme + Drake-Rot
+#C8102E als Akzent. CustomTkinter rendert plattformidentisch.
+
+Testbarkeit:
+  - MainWindow konstruiert KEIN mainloop automatisch.
+  - create_app() ist die Factory für App-Start / Tests.
+  - confirm_drop_conflict(name) -> bool ist mock-patchbar.
+  - 'import main_gui' erzwingt KEIN Tk-Init (kein Display nötig).
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import traceback
-from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
-from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (
-    QApplication,
-    QAbstractItemView,
-    QFileDialog,
-    QHBoxLayout,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QStatusBar,
-    QStyle,
-    QVBoxLayout,
-    QWidget,
-)
+import customtkinter as ctk
 
 # ---------------------------------------------------------------------------
-# QApplication: nur beim eigentlichen Start instantiiert (Import ohne exec)
+# Backend-Module (unverändert genutzte APIs)
 # ---------------------------------------------------------------------------
-
-_QApp = None
-
-
-def _ensure_qapp() -> "QApplication":
-    """Lazy QApplication-Erzeugung. Nur nötig beim Show/Exec."""
-    global _QApp
-    if _QApp is None:
-        _QApp = QApplication.instance()
-        if _QApp is None:
-            _QApp = QApplication(sys.argv)
-    return _QApp
-
-
-# ---------------------------------------------------------------------------
-# Importe der Nachbarmodule (defensiv, falls noch nicht installiert)
-# ---------------------------------------------------------------------------
-
+import app_dirs
 import extract_global
 import merge
-
-try:
-    import app_dirs
-except ImportError:
-    app_dirs = None
-
-try:
-    import settings
-except ImportError:
-    settings = None
-
-try:
-    import version_detection
-except ImportError:
-    version_detection = None
+import settings
+import version_detection
 
 # ---------------------------------------------------------------------------
-# QSS — dunkles Theme + Drake-Rot #C8102E Akzent
+# Farben & Design-Konstanten (dunkles Theme, Drake-Rot Akzent)
 # ---------------------------------------------------------------------------
+ACCENT = "#C8102E"            # Drake-Rot: Überschriften, Buttons, aktive Elemente
+ACCENT_HOVER = "#E0243F"      # Helleres Rot für Hover-Zustände
+BG_WINDOW = "#17171A"         # Fensterhintergrund (beinahe schwarz)
+BG_CARD = "#222226"           # Karten / Listen-Hintergrund (dunkelgrau)
+BG_INPUT = "#2C2C31"          # Eingabefelder (Combo, Entry, Checkbox-Hintergrund)
+BG_NEUTRAL = "#333338"        # Sekundäre Buttons
+BG_NEUTRAL_HOVER = "#3D3D44"
+TEXT_MAIN = "#EAEAEA"         # Haupttext
+TEXT_DIM = "#9A9A9A"          # Sekundärtext (Hinweise, Output-Pfad)
+ERROR_RED = "#FF5C5C"         # Fehler in der Statusleiste
 
-_QSS = """
-/* --------------------------------------------------------------- Hauptfenster */
-QMainWindow {
-    background-color: #1e1e1e;
-}
-
-/* --------------------------------------------------------------- Statusbar */
-QStatusBar {
-    background-color: #1e1e1e;
-    color: #cccccc;
-    border-top: 1px solid #333333;
-}
-QStatusBar QLabel {
-    color: #aaaaaa;
-    font-size: 11px;
-}
-
-/* --------------------------------------------------------------- QGroupBox */
-QGroupBox {
-    background-color: #252526;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    margin-top: 8px;
-    padding-top: 12px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 12px;
-    padding: 0 6px;
-    color: #C8102E;
-    font-size: 12px;
-    font-weight: bold;
-}
-
-/* --------------------------------------------------------------- QComboBox */
-QComboBox {
-    background-color: #2d2d2d;
-    color: #e0e0e0;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    padding: 5px 10px;
-    min-height: 28px;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 24px;
-}
-QComboBox::down-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 6px solid #e0e0e0;
-    margin-right: 6px;
-}
-QComboBox QAbstractItemView {
-    background-color: #2d2d2d;
-    color: #e0e0e0;
-    selection-background-color: #C8102E;
-    selection-color: #ffffff;
-    border: 1px solid #444444;
-    outline: none;
-}
-
-/* --------------------------------------------------------------- QLineEdit */
-QLineEdit {
-    background-color: #2d2d2d;
-    color: #e0e0e0;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    padding: 5px 10px;
-}
-QLineEdit:focus {
-    border: 1px solid #C8102E;
-}
-
-/* --------------------------------------------------------------- QListWidget */
-QListWidget {
-    background-color: #2d2d2d;
-    color: #e0e0e0;
-    border: 1px solid #444444;
-    border-radius: 4px;
-    padding: 4px;
-}
-QListWidget::item {
-    padding: 4px 8px;
-    border-radius: 2px;
-}
-QListWidget::item:selected {
-    background-color: #C8102E;
-    color: #ffffff;
-}
-QListWidget::item:hover:!selected {
-    background-color: #3a3a3a;
-}
-
-/* Drop-Highlight: über Qt-Eigenschaft [draggable] gesteuert */
-QListWidget[draggable="true"] {
-    border: 2px solid #C8102E;
-}
-
-/* --------------------------------------------------------------- Checkbox */
-QCheckBox {
-    color: #e0e0e0;
-    spacing: 8px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border: 1px solid #555555;
-    border-radius: 3px;
-    background-color: #2d2d2d;
-}
-QCheckBox::indicator:checked {
-    background-color: #C8102E;
-    border-color: #C8102E;
-}
-QCheckBox::indicator:hover {
-    border-color: #ff6666;
-}
-
-/* --------------------------------------------------------------- QPushButton */
-QPushButton {
-    background-color: #C8102E;
-    color: #ffffff;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 20px;
-    font-weight: bold;
-    font-size: 13px;
-}
-QPushButton:hover {
-    background-color: #d93044;
-}
-QPushButton:pressed {
-    background-color: #a80d24;
-}
-QPushButton:disabled {
-    background-color: #555555;
-    color: #888888;
-}
-
-/* Sekundär-/Neutral-Button (z.B. "Output-Ordner öffnen") */
-QPushButton:not(#primary_btn):not(#reload_btn) {
-    background-color: #333333;
-    color: #e0e0e0;
-    border: 1px solid #4a4a4a;
-    font-weight: normal;
-}
-QPushButton:not(#primary_btn):not(#reload_btn):hover {
-    background-color: #3d3d3d;
-    border-color: #C8102E;
-}
-QPushButton:not(#primary_btn):not(#reload_btn):pressed {
-    background-color: #2a2a2a;
-}
-
-/* Kleiner Reload-Button (runde Form) */
-QPushButton#reload_btn {
-    background-color: #333333;
-    color: #C8102E;
-    border: 1px solid #4a4a4a;
-    border-radius: 13px;
-    font-size: 15px;
-    font-weight: bold;
-    padding: 0;
-}
-QPushButton#reload_btn:hover {
-    background-color: #3d3d3d;
-    border-color: #C8102E;
-}
-
-/* --------------------------------------------------------------- QLabel */
-QLabel {
-    color: #e0e0e0;
-}
-QLabel#title {
-    font-size: 20px;
-    font-weight: bold;
-    color: #ffffff;
-    letter-spacing: 0.5px;
-}
-QLabel#section {
-    font-size: 13px;
-    font-weight: bold;
-    color: #C8102E;
-    padding-top: 8px;
-    border-bottom: 1px solid #333333;
-    padding-bottom: 4px;
-}
-QLabel#output_path {
-    color: #9a9a9a;
-    font-family: monospace;
-    font-size: 11px;
-    background-color: #232323;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    padding: 6px 8px;
-}
-"""
+CUSTOM_PATH_LABEL = "Eigener Pfad..."  # Label im Versions-Dropdown für eigenen Pfad
 
 
-class MainWindow(QMainWindow):
-    """Hauptfenster des SC Localization Merger."""
+# ---------------------------------------------------------------------------
+# Hilfsfunktionen (OS-agnostisch)
+# ---------------------------------------------------------------------------
+def open_in_file_manager(path: str) -> bool:
+    """Öffnet einen Ordner im nativen Dateimanager (Win/Linux/macOS).
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("SC Localization Merger")
-        self.resize(620, 560)
-        self.setMinimumSize(480, 400)
+    Gibt True zurück, falls der Öffnungs-Befehl gestartet werden konnte.
+    """
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)  # Windows: nativer Explorer
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])  # macOS
+        else:
+            subprocess.Popen(["xdg-open", path])  # Linux
+        return True
+    except Exception:
+        return False
 
-        self.apply_qss()
 
-        assert app_dirs is not None, "app_dirs-Modul ist nicht verfügbar"
+# ---------------------------------------------------------------------------
+# Hauptfenster
+# ---------------------------------------------------------------------------
+class MainWindow(ctk.CTk):
+    """Hauptfenster des SC Localization Merger (CustomTkinter).
 
-        # App-Datenverzeichnisse statt Projektordner
+    Konstruiert das komplette UI. Startet KEIN mainloop — das macht
+    create_app() bzw. der __main__-Block. Dadurch ist die Klasse in
+    Tests (Xvfb / DISPLAY) direkt instanzierbar.
+    """
+
+    def __init__(self, *args, **kwargs):
+        # Fensterhintergrund als Default setzen, falls nicht übergeben
+        kwargs.setdefault("fg_color", BG_WINDOW)
+        super().__init__(*args, **kwargs)
+
+        # Dunkles Theme (muss nach dem Tk-Root gesetzt werden)
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("dark-blue")
+
+        # Fenstereigenschaften
+        self.title("SC Localization Merger")
+        self.geometry("660x780")
+        self.minsize(520, 520)
+
+        # Schriften (Titel deutlich größer als Normtext)
+        self._font_title = ctk.CTkFont(size=30, weight="bold")
+        self._font_subtitle = ctk.CTkFont(size=13)
+        self._font_section = ctk.CTkFont(size=16, weight="bold")
+        self._font_body = ctk.CTkFont(size=14)
+        self._font_small = ctk.CTkFont(size=12)
+        self._font_button = ctk.CTkFont(size=14, weight="bold")
+
+        # ---------------------------------------------------------- App-Pfade
         self._ini_dir = str(app_dirs.get_ini_dir())
         self._output_dir = str(app_dirs.get_output_dir())
+        self._data_p4k: str | None = None      # aktuell gewähltes Data.p4k
+        self._custom_folder: str | None = None  # eigener Channel-Pfad (falls gewählt)
 
-        # Projekt-ini-Ordner für Migration (nur beim ersten Start).
-        # Im PyInstaller-Frozen-Bundle existiert kein Projekt-ini — dann überspringen,
-        # sonst crasht die Migration mit FileNotFoundError (__file__ zeigt auf /tmp/_MEI...).
-        proj_ini = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "ini"
-        )
-        if app_dirs is not None and os.path.isdir(proj_ini):
+        # Einmalige Migration der Projekt-INIs in den App-Ordner.
+        # ACHTUNG: nur aufrufen, wenn der Projekt-ini-Ordner wirklich existiert —
+        # im PyInstaller-Frozen-Bundle zeigt __file__ auf /tmp/_MEI... und die
+        # Migration würde mit FileNotFoundError crashen.
+        proj_ini = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ini")
+        if os.path.isdir(proj_ini):
             app_dirs.migrate_project_inis(proj_ini)
 
-        # Prüfen, ob App-INI-Ordner leer ist → Projekt als Lese-Fallback
-        # (nur sinnvoll im Source-Lauf, wo ein Projekt-ini existieren kann).
-        self._fallback_dir = None
-        if os.path.isdir(proj_ini) and not os.listdir(self._ini_dir):
-            self._fallback_dir = proj_ini
-
-        # Version-Erkennung
+        # ---------------------------------------------------------- Versionen
         self._versions: list = []
-        if version_detection is not None:
-            try:
-                self._versions = version_detection.detect_versions()
-            except Exception:
-                self._versions = []
+        try:
+            self._versions = version_detection.detect_versions()
+        except Exception:
+            self._versions = []  # Erkennung fehlgeschlagen → nur "Eigener Pfad"
 
-        # Widgets bauen
-        self._combo_box = self._build_combo()
-        self._build_edit = self._build_build_line()
-        self._list = self._build_list()
-        self._merge_btn = self._build_merge_button()
-        self._open_output_btn = self._build_open_output_button()
-        self._reload_btn = self._build_reload_button()
-        self._output_path_label = QLabel("")
-        self._output_path_label.setObjectName("output_path")
-        self._output_path_label.setWordWrap(True)
-        self._status_bar = self._build_status_bar()
-
-        # Mod-Liste einmalig befüllen (sonst bleibt sie leer, bis DnD/Refresh greift)
-        self._load_list()
-
-        # Layout
-        main_layout = self._build_layout()
-        central = QWidget()
-        central.setLayout(main_layout)
-        self.setCentralWidget(central)
-
-        # Signale verbinden
-        self._connect_signals()
-
-        # Settings laden und UI vorbelegen
-        if settings is not None:
-            self._settings_path = str(app_dirs.get_settings_path())
-            self._load_settings()
-            self._restore_settings()
-
-    # =============================================================== QSS
-
-    def apply_qss(self):
-        """QSS-Stylesheet auf das gesamte Fenster anwenden."""
-        self.setStyleSheet(_QSS)
-
-    # =============================================================== Builder
-
-    def _build_combo(self):
-        """QComboBox für die Versionsauswahl."""
-        combobox = self._make_combobox()
-
+        # Label → SCVersion-Karte für das Dropdown
         self._version_map: dict[str, object] = {}
         for v in self._versions:
+            # Label-Format: '{channel} — {basisname_des_channel_ordners}'
             base = os.path.basename(os.path.dirname(v.data_p4k))
-            label = f"{v.channel} — {base}"
-            self._version_map[label] = v
+            self._version_map[f"{v.channel} — {base}"] = v
 
-        combobox.addItems(list(self._version_map.keys()) + ["Eigener Pfad..."])
-        if self._versions:
-            combobox.setCurrentIndex(0)
+        # ---------------------------------------------------------- UI bauen
+        self._build_title()
+        self._build_section_version()
+        self._build_section_mods()
+        self._build_section_output()
+        self._build_status_bar()
 
-        return combobox
+        # ---------------------------------------------------------- Settings
+        self._settings_path = str(app_dirs.get_settings_path())
+        self._settings = settings.load_settings(self._settings_path)
+        self._restore_settings()
 
-    def _build_build_line(self):
-        """QLineEdit für die Build-Nummer."""
-        edit = self._make_lineedit()
-        edit.setPlaceholderText("Build-Nummer wird automatisch gesetzt")
-        return edit
-
-    def _build_list(self):
-        """QListWidget mit CheckBoxes für Mod-Dateien."""
-        widget = QListWidget()
-        widget.setMinimumHeight(200)
-        widget.setAcceptDrops(True)
-        widget.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
-        widget.setProperty("draggable", False)
-
-        self._delete_action = QAction("Löschen", self)
-        widget.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
-        widget.addAction(self._delete_action)
-        self._delete_action.triggered.connect(self._on_delete_selected)
-
-        widget.dragEnterEvent = self._on_drag_enter
-        widget.dragLeaveEvent = self._on_drag_leave
-        widget.dropEvent = self._on_drop
-
-        return widget
-
-    def _build_merge_button(self):
-        """QPushButton „Extract & Merge"."""
-        btn = QPushButton("Extract && Merge")
-        btn.setMinimumHeight(40)
-        btn.setMinimumWidth(220)
-        btn.setObjectName("primary_btn")
-        return btn
-
-    def _build_open_output_button(self):
-        """QPushButton „Output-Ordner öffnen"."""
-        btn = QPushButton("Output-Ordner öffnen")
-        btn.setMinimumHeight(36)
-        btn.setMinimumWidth(200)
-        btn.setToolTip(
-            "Öffnet den Ordner, in dem die gemergte global.ini "
-            "abgelegt wird (App-Datenordner/Output)."
+    # =============================================================== Titel
+    def _build_title(self):
+        """Große Überschrift + Fan-Kennzeichnung."""
+        title = ctk.CTkLabel(
+            self, text="SC Localization Merger",
+            font=self._font_title, text_color="#FFFFFF",
         )
-        return btn
+        title.pack(padx=24, pady=(18, 0), anchor="w")
 
-    def _build_reload_button(self):
-        """Kleiner Reload-Button über der Mod-Liste (Neu einlesen des ini/-Ordners)."""
-        btn = QPushButton("")
-        btn.setFixedSize(30, 26)
-        # System-Icon (garantiert gerendert, unabhängig von verfügbaren Fonts)
-        icon = self.style().standardIcon(
-            QStyle.StandardPixmap.SP_BrowserReload
+        subtitle = ctk.CTkLabel(
+            self, text="Unofficial fan project",
+            font=self._font_subtitle, text_color=TEXT_DIM,
         )
-        btn.setIcon(icon)
-        btn.setToolTip(
-            "Mod-Liste neu laden — prüft den ini/-Ordner auf neue/entfernte Dateien"
+        subtitle.pack(padx=26, pady=(0, 6), anchor="w")
+
+    # =============================================================== Sektion 1
+    def _build_section_version(self):
+        """Sektion '1. Star Citizen Version': Dropdown + Build-Feld."""
+        header = ctk.CTkLabel(
+            self, text="1. Star Citizen Version",
+            font=self._font_section, text_color=ACCENT, anchor="w",
         )
-        btn.setObjectName("reload_btn")
-        return btn
+        header.pack(fill="x", padx=24, pady=(14, 6))
 
-    def _on_reload_clicked(self):
-        """Mods neu aus dem ini/-Ordner einlesen (Checkstand bleibt erhalten)."""
-        self._list.blockSignals(True)
-        self._refresh_list()
-        self._list.blockSignals(False)
-        self._update_status("Mod-Liste neu geladen")
+        # Dropdown-Zeile: 'Kanal:' + OptionMenu
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=24)
+        row.grid_columnconfigure(1, weight=1)
 
-    def _on_open_output(self):
-        """Öffnet den Output-Ordner im Dateimanager."""
-        out_dir = self._output_dir
-        if not os.path.isdir(out_dir):
-            os.makedirs(out_dir, exist_ok=True)
-        _ensure_qapp().processEvents()
-        url = QUrl.fromLocalFile(out_dir)
-        if not QDesktopServices.openUrl(url):
-            self._update_status(f"Konnte '{out_dir}' nicht öffnen")
-            return
-        self._update_status("Output-Ordner geöffnet")
+        ctk.CTkLabel(
+            row, text="Kanal:", font=self._font_body, text_color=TEXT_MAIN,
+        ).grid(row=0, column=0, padx=(0, 10), pady=8, sticky="w")
 
-    def _build_status_bar(self):
-        """QStatusBar mit Nachricht und Fortschritt."""
-        bar = QStatusBar()
-        self._status_msg = QLabel("")
-        self._status_progress = QLabel("")
-        bar.addWidget(self._status_msg)
-        bar.addPermanentWidget(self._status_progress)
-        self.setStatusBar(bar)
-        self._update_status("Bereit — Kanal wählen")
-        return bar
+        # Werte: erkannte Versionen + 'Eigener Pfad...'
+        values = list(self._version_map.keys()) + [CUSTOM_PATH_LABEL]
+        self._version_menu = ctk.CTkOptionMenu(
+            row, values=values,
+            command=self._on_version_changed,
+            font=self._font_body,
+            fg_color=BG_INPUT, button_color=ACCENT,
+            button_hover_color=ACCENT_HOVER, text_color=TEXT_MAIN,
+            dropdown_fg_color=BG_CARD, dropdown_text_color=TEXT_MAIN,
+            dropdown_hover_color=ACCENT,
+            height=36, anchor="w",
+        )
+        self._version_menu.grid(row=0, column=1, sticky="ew", pady=8)
+        # Default-Auswahl: erste erkannte Version, sonst 'Eigener Pfad...'
+        self._version_menu.set(values[0])
 
-    # =============================================================== Layout
+        # Build-Nummer-Zeile: Label + editierbares Entry
+        build_row = ctk.CTkFrame(self, fg_color="transparent")
+        build_row.pack(fill="x", padx=24, pady=(0, 0))
+        build_row.grid_columnconfigure(1, weight=1)
 
-    def _build_layout(self):
-        """Hauptlayout zusammenbauen."""
-        # Titel
-        title = QLabel("SC Localization Merger")
-        title.setObjectName("title")
+        ctk.CTkLabel(
+            build_row, text="Build:", font=self._font_body,
+            text_color=TEXT_MAIN,
+        ).grid(row=0, column=0, padx=(0, 10), sticky="w")
 
-        # Fan-Kennzeichner (BEHALTEN)
-        fan_label = QLabel("Unofficial fan project")
-        fan_label.setObjectName("section")
+        self._build_entry = ctk.CTkEntry(
+            build_row, font=self._font_body,
+            fg_color=BG_INPUT, border_color="#444449", text_color=TEXT_MAIN,
+            placeholder_text="Build-Nummer wird automatisch gesetzt",
+            height=34,
+        )
+        self._build_entry.grid(row=0, column=1, sticky="ew", pady=(0, 4))
+        self._build_entry.bind("<KeyRelease>", lambda _e: self._save_settings())
 
-        # Sektionen (Farbe DIREKT am Label gesetzt — Selektor #section greift nicht zuverlaessig)
-        s1 = QLabel("1. Star Citizen Version")
-        s1.setObjectName("section")
-        s1.setStyleSheet("color:#C8102E;font-weight:bold;font-size:13px;"
-                         "padding-top:8px;padding-bottom:4px;border-bottom:1px solid #333333;")
-        s2 = QLabel("2. Mod-Auswahl")
-        s2.setObjectName("section")
-        s2.setStyleSheet("color:#C8102E;font-weight:bold;font-size:13px;"
-                         "padding-top:8px;padding-bottom:4px;border-bottom:1px solid #333333;")
-        s3 = QLabel("3. Output & Aktion")
-        s3.setObjectName("section")
-        s3.setStyleSheet("color:#C8102E;font-weight:bold;font-size:13px;"
-                         "padding-top:8px;padding-bottom:4px;border-bottom:1px solid #333333;")
-
-        # Hauptlayout anwenden (kein doppeltes setStyleSheet mehr nötig —
-        # Styles liegen global in _QSS bzw. direkt an den Labels)
-        self.setStyleSheet(_QSS)
-
-        main = QVBoxLayout()
-        main.setSpacing(12)
-        main.addSpacing(4)
-        main.addWidget(title)
-        main.addWidget(fan_label)
-        main.addSpacing(4)
-
-        # 1. Star Citizen Version
-        main.addWidget(s1)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Kanal:"))
-        row.addWidget(self._combo_box, 1)
-        main.addLayout(row)
-        main.addWidget(self._build_edit)
-        main.addSpacing(8)
-
-        # 2. Mod-Auswahl (+ Reload-Button rechts in derselben Zeile)
-        mod_header = QHBoxLayout()
-        mod_header.addWidget(s2)
-        mod_header.addStretch()
-        mod_header.addWidget(self._reload_btn)
-        main.addLayout(mod_header)
-        main.addWidget(self._list)
-        main.addSpacing(8)
-
-        # 3. Output & Aktion (Output-Pfad inline + Aktion beibehalten)
-        main.addWidget(s3)
-        main.addWidget(self._output_path_label)
-        btn_row = QHBoxLayout()
-        btn_row.addWidget(self._open_output_btn)
-        btn_row.addWidget(self._merge_btn)
-        btn_row.addStretch()
-        main.addLayout(btn_row)
-        main.addStretch()
-        main.setContentsMargins(24, 16, 24, 16)
-
-        # Outputpfad nach Layout verfügbar machen
-        self._output_path_label.setText(f"Output: {self._output_dir}")
-        return main
-
-    # =============================================================== Widgets
-
-    def _make_combobox(self):
-        """QComboBox erstellen."""
-        from PySide6.QtWidgets import QComboBox
-
-        return QComboBox()
-
-    def _make_lineedit(self):
-        """QLineEdit erstellen."""
-        from PySide6.QtWidgets import QLineEdit
-
-        return QLineEdit()
-
-    # =============================================================== Signale
-
-    def _connect_signals(self):
-        """UI-Signale mit Speicherungs-Callback verbinden."""
-        self._merge_btn.clicked.connect(self._on_merge_clicked)
-        self._reload_btn.clicked.connect(self._on_reload_clicked)
-        self._open_output_btn.clicked.connect(self._on_open_output)
-        self._combo_box.currentIndexChanged.connect(self._on_combo_changed)
-        self._build_edit.textChanged.connect(self._save_settings)
-        self._list.itemChanged.connect(self._save_settings)
-
-    def _on_combo_changed(self, index: int):
-        """Reagiert auf Kanalwechsel — Build-Feld aktualisieren + _data_p4k setzen."""
-        items = self._combo_box.itemText(index)
-
-        if items == "Eigener Pfad...":
-            # Ordner auswählen (Dateidialog nur auf Userverseite im Event)
-            folder = QFileDialog.getExistingDirectory(
-                self,
-                "Channel-Ordner auswählen",
-                "",
-                QFileDialog.Option.ShowDirsOnly,
-            )
+    def _on_version_changed(self, value: str):
+        """Dropdown-Änderung: Build auslesen, _data_p4k setzen, speichern."""
+        if value == CUSTOM_PATH_LABEL:
+            # Ordner-Dialog (abgespalten, damit Tests mocken können)
+            folder = self.ask_channel_folder()
             if not folder:
-                # Abgebrochen — zurück zur vorherigen Auswahl
-                self._combo_box.blockSignals(True)
-                self._combo_box.setCurrentIndex(max(0, index - 1))
-                self._combo_box.blockSignals(False)
-                self._update_status("Ordnerauswahl abgebrochen")
-                self._save_settings()
+                # Abgebrochen → vorherige Auswahl wiederherstellen
+                self._revert_version_menu()
+                self._set_status("Ordnerauswahl abgebrochen")
                 return
-
-            data_p4k = os.path.join(folder, "Data.p4k")
-            build_number = ""
-            if version_detection is not None:
-                try:
-                    build_number = version_detection.find_build_number(folder)
-                except Exception:
-                    build_number = ""
-            self._build_edit.setText(build_number)
             self._custom_folder = folder
-            self._data_p4k = data_p4k
-            self._update_status(f"Ordner: {os.path.basename(folder)}")
+            self._data_p4k = os.path.join(folder, "Data.p4k")
+            build = ""
+            try:
+                build = version_detection.find_build_number(folder)
+            except Exception:
+                build = ""
+            self._build_entry.delete(0, "end")
+            self._build_entry.insert(0, build)
+            self._set_status(f"Ordner: {os.path.basename(folder)}")
         else:
-            v = self._version_map.get(items)
+            v = self._version_map.get(value)
             if v:
                 self._custom_folder = None
                 self._data_p4k = v.data_p4k
-                self._build_edit.setText(v.build_number)
-                self._update_status(f"{v.channel} — Build {v.build_number}")
+                self._build_entry.delete(0, "end")
+                self._build_entry.insert(0, v.build_number)
+                self._set_status(f"{v.channel} — Build {v.build_number}")
             else:
-                self._update_status("Unbekannter Kanal-Eintrag")
-
-        # Version / Pfad in Settings speichern
+                self._set_status("Unbekannter Kanal-Eintrag")
         self._save_settings()
 
-    def _load_settings(self):
-        if settings is None:
-            self._settings = {
-                "selected": [],
-                "version": "",
-                "path": "",
-            }
+    def ask_channel_folder(self) -> str:
+        """Öffnet den Ordner-Dialog für einen Channel-Ordner.
+
+        Gibt den gewählten Pfad zurück oder '' bei Abbruch.
+        (Abgespaltene Methode — in Tests mocken.)
+        """
+        return filedialog.askdirectory(
+            parent=self, title="Channel-Ordner auswählen"
+        ) or ""
+
+    def _revert_version_menu(self):
+        """Dropdown auf die zuletzt gültige Auswahl zurücksetzen."""
+        prev = self._settings.get("version", "") or ""
+        values = list(self._version_map.keys()) + [CUSTOM_PATH_LABEL]
+        self._version_menu.set(prev if prev in values else values[0])
+
+    # =============================================================== Sektion 2
+    def _build_section_mods(self):
+        """Sektion '2. Mod-Auswahl': Header + Reload-Button + Mod-Liste."""
+        header_row = ctk.CTkFrame(self, fg_color="transparent")
+        header_row.pack(fill="x", padx=24, pady=(16, 6))
+        header_row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header_row, text="2. Mod-Auswahl",
+            font=self._font_section, text_color=ACCENT, anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+
+        # Kleiner Reload-Button rechts (⟳) — liest den ini/-Ordner neu ein,
+        # ohne den Checkstand der vorhandenen Einträge zu verlieren.
+        self._reload_btn = ctk.CTkButton(
+            header_row, text="⟳", width=34, height=30,
+            font=self._font_button, fg_color=BG_CARD,
+            hover_color=BG_NEUTRAL_HOVER, text_color=ACCENT,
+            command=self.reload_mod_list,
+        )
+        self._reload_btn.grid(row=0, column=1, sticky="e")
+
+        # Scrollbare Liste der Mod-Dateien (eine Checkbox je .ini)
+        self._list_frame = ctk.CTkScrollableFrame(
+            self, fg_color=BG_CARD, corner_radius=8,
+        )
+        self._list_frame.pack(fill="x", padx=24)
+
+        # Checkbox-Variablen je Datei (Name → BooleanVar)
+        self._checkboxes: dict[str, ctk.BooleanVar] = {}
+
+        # Dateiopfer-Einladung: 'INI-Datei hinzufügen...' (auch für Drag-Geste)
+        self._add_ini_btn = ctk.CTkButton(
+            self, text="➕  INI-Datei hinzufügen...",
+            font=self._font_body, fg_color=BG_CARD,
+            hover_color=BG_NEUTRAL_HOVER, text_color=TEXT_MAIN,
+            height=32, command=self.choose_ini_file,
+        )
+        self._add_ini_btn.pack(fill="x", padx=24, pady=(6, 0))
+
+        # Drag & Drop per Maus-Geste:
+        # ButtonPress/B1-Motion/ButtonRelease auf der Listenfläche —
+        # eine Drag-Bewegung ruft am Ende den Datei-Dialog auf (Dateiopfer).
+        self._drag_start: tuple[int, int] | None = None
+        self._drag_active = False
+        self._list_frame.bind("<ButtonPress-1>", self._on_drag_press)
+        self._list_frame.bind("<B1-Motion>", self._on_drag_motion)
+        self._list_frame.bind("<ButtonRelease-1>", self._on_drag_release)
+
+    def _on_drag_press(self, event):
+        """Drag-Anfang merken (Maus-Position)."""
+        self._drag_start = (event.x, event.y)
+        self._drag_active = False
+
+    def _on_drag_motion(self, event):
+        """Drag-Erkennung: Bewegung über 8 Pixel zählt als Drag."""
+        if self._drag_start is None:
+            return
+        dx = event.x - self._drag_start[0]
+        dy = event.y - self._drag_start[1]
+        if (dx * dx + dy * dy) ** 0.5 > 8:
+            self._drag_active = True
+
+    def _on_drag_release(self, _event):
+        """Drag-Ende: Datei-Dialog öffnen (Dateiopfer für .ini-Dateien)."""
+        active, self._drag_active = self._drag_active, False
+        self._drag_start = None
+        if active:
+            self.choose_ini_file()
+
+    # ---------------------------------------------------------- Mod-Liste
+    def _build_mod_list(self, checked_names: set[str] | None = None):
+        """Liste aller .ini-Dateien aus dem App-INI-Ordner aufbauen.
+
+        checked_names=None  → alle angehakt (Standard beim Erststart).
+        checked_names=set   → gespeicherter Checkstand wiederherstellen.
+        """
+        # Alte Einträge entfernen
+        for child in self._list_frame.winfo_children():
+            child.destroy()
+        self._checkboxes.clear()
+
+        files = merge.list_mod_inis(self._ini_dir)
+
+        if not files:
+            # Hinweis bei leerem Ordner
+            ctk.CTkLabel(
+                self._list_frame,
+                text="Keine .ini-Dateien — ziehe eine hierher oder nutze "
+                     "'INI-Datei hinzufügen...'",
+                font=self._font_small, text_color=TEXT_DIM,
+            ).pack(padx=12, pady=14)
+            return
+
+        for fname in files:
+            row = ctk.CTkFrame(self._list_frame, fg_color="transparent")
+            row.pack(fill="x", padx=6, pady=2)
+
+            # Standard: angehakt, außer gespeichertes Set existiert
+            default_checked = (
+                fname in checked_names if checked_names is not None else True
+            )
+            var = ctk.BooleanVar(value=default_checked)
+            self._checkboxes[fname] = var
+
+            ctk.CTkCheckBox(
+                row, text=fname, variable=var,
+                command=lambda name=fname: self._on_checkbox_changed(name),
+                checkbox_width=20, checkbox_height=20,
+                border_width=2,
+                fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                checkmark_color="#FFFFFF",
+                text_color=TEXT_MAIN, font=self._font_body,
+            ).pack(side="left", fill="x", expand=True, padx=(6, 4))
+
+            # Löschen-Button: löscht GENAU diese (markierte) Datei
+            ctk.CTkButton(
+                row, text="🗑", width=32, height=28,
+                fg_color=BG_INPUT, hover_color=BG_NEUTRAL_HOVER,
+                text_color=TEXT_DIM,
+                command=lambda name=fname: self.delete_mod_row(name),
+            ).pack(side="right", padx=(0, 4))
+
+            # Kontextmenü (Rechtsklick): 'Löschen' für genau diese Zeile
+            menu = tk.Menu(row, tearoff=0)
+            menu.add_command(
+                label="Löschen",
+                command=lambda name=fname: self.delete_mod_row(name),
+            )
+            row.bind(
+                "<Button-3>",
+                lambda e, menu=menu: menu.tk_popup(e.x_root, e.y_root),
+            )
+
+    def reload_mod_list(self):
+        """ini/-Ordner neu einlesen — Checkstand bestehender Einträge bleibt erhalten."""
+        checked = {name for name, var in self._checkboxes.items() if var.get()}
+        self._build_mod_list(checked_names=checked)
+        self._save_settings()
+        self._set_status("Mod-Liste neu geladen")
+
+    def _on_checkbox_changed(self, _name: str):
+        """Checkbox geändert → Auswahl persistieren."""
+        self._save_settings()
+
+    def delete_mod_row(self, filename: str) -> bool:
+        """Löscht genau die markierte (selektierte) Datei per merge.delete_mod_ini.
+
+        Ohne Markierung tut nichts (Rückgabe False).
+        """
+        if not filename:
+            self._set_status("Keine Datei markiert — erst anklicken/auswählen")
+            return False
+        ok = merge.delete_mod_ini(self._ini_dir, filename)
+        if not ok:
+            self._set_status(f"'{filename}' konnte nicht gelöscht werden", error=True)
+            return False
+        self.reload_mod_list()
+        self._set_status(f"'{filename}' gelöscht")
+        return True
+
+    # ---------------------------------------------------------- Drag & Drop / Datei-Dialog
+    def choose_ini_file(self):
+        """Datei-Dialog: .ini-Datei wählen und in den App-INI-Ordner übernehmen."""
+        source = filedialog.askopenfilename(
+            parent=self,
+            title=".ini-Datei auswählen",
+            filetypes=[("INI-Dateien", "*.ini"), ("Alle Dateien", "*.*")],
+        )
+        if source:
+            self.handle_ini_drop(source)
+
+    def handle_ini_drop(self, source_path: str) -> bool:
+        """Übernimmt eine .ini-Datei in den App-INI-Ordner (via app_dirs.drop_ini_into).
+
+        Existiert die Datei bereits, wird per confirm_drop_conflict() gefragt;
+        bei 'Nein' wird NICHT kopiert.
+        """
+        if not source_path.lower().endswith(".ini"):
+            self._set_status("Nur .ini-Dateien werden übernommen", error=True)
+            return False
+
+        name = os.path.basename(source_path)
+        target = os.path.join(self._ini_dir, name)
+
+        # Konflikt-Entscheidung (testbare Methode — via mock patchbar)
+        if os.path.exists(target):
+            if not self.confirm_drop_conflict(name):
+                self._set_status("Drop abgebrochen (Datei existiert)")
+                return False
+
+        try:
+            app_dirs.drop_ini_into(self._ini_dir, source_path)
+        except Exception as exc:
+            self._set_status(f"Kopieren fehlgeschlagen: {exc}", error=True)
+            return False
+
+        self.reload_mod_list()
+        self._set_status(f"Datei '{name}' hinzugefügt")
+        return True
+
+    def confirm_drop_conflict(self, name: str) -> bool:
+        """Fragt nach, ob eine existierende Datei überschrieben werden soll.
+
+        Rückgabe: True = Fortfahren (überschreiben), False = Abbrechen.
+        (Testbar: in Tests per mock.patch patchen.)
+        """
+        return messagebox.askyesno(
+            self,
+            "Datei existiert",
+            f"'{name}' existiert bereits im INI-Ordner.\nÜberschreiben?",
+        )
+
+    # =============================================================== Sektion 3
+    def _build_section_output(self):
+        """Sektion '3. Output & Aktion': Output-Pfad + Aktions-Buttons."""
+        header = ctk.CTkLabel(
+            self, text="3. Output & Aktion",
+            font=self._font_section, text_color=ACCENT, anchor="w",
+        )
+        header.pack(fill="x", padx=24, pady=(16, 6))
+
+        # Output-Pfad inline anzeigen
+        self._output_label = ctk.CTkLabel(
+            self, text=f"Output: {self._output_dir}",
+            font=self._font_small, text_color=TEXT_DIM,
+            anchor="w", justify="left", wraplength=600,
+        )
+        self._output_label.pack(fill="x", padx=24)
+
+        # Button-Zeile: 'Output-Ordner öffnen' + 'Extract & Merge'
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.pack(fill="x", padx=24, pady=(8, 0))
+        btn_row.grid_columnconfigure(0, weight=1)
+        btn_row.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkButton(
+            btn_row, text="Output-Ordner öffnen",
+            font=self._font_body, fg_color=BG_CARD,
+            hover_color=BG_NEUTRAL_HOVER, text_color=TEXT_MAIN,
+            height=40, command=self._on_open_output,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self._merge_btn = ctk.CTkButton(
+            btn_row, text="Extract & Merge",
+            font=self._font_button, fg_color=ACCENT,
+            hover_color=ACCENT_HOVER, text_color="#FFFFFF",
+            height=40, command=self._on_merge_clicked,
+        )
+        self._merge_btn.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+
+    def _on_open_output(self):
+        """Öffnet den Output-Ordner im nativen Dateimanager."""
+        out_dir = self._output_dir
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+        if open_in_file_manager(out_dir):
+            self._set_status("Output-Ordner geöffnet")
         else:
-            self._settings = settings.load_settings(self._settings_path)
+            self._set_status(f"Konnte '{out_dir}' nicht öffnen", error=True)
 
+    # =============================================================== Statusleiste
+    def _build_status_bar(self):
+        """Statusleiste am Boden (Bereit / Arbeitsstatus / Fehler in Rot)."""
+        self._status_label = ctk.CTkLabel(
+            self, text="Bereit — Kanal wählen",
+            font=self._font_small, text_color=TEXT_DIM, anchor="w",
+        )
+        self._status_label.pack(side="bottom", fill="x", padx=24, pady=(8, 10))
+
+    def _set_status(self, text: str, error: bool = False):
+        """Status-Nachricht setzen (rot bei Fehler)."""
+        self._status_label.configure(text=text, text_color=ERROR_RED if error else TEXT_DIM)
+
+    # =============================================================== Settings
     def _restore_settings(self):
-        """Gespeicherte UI-Zustände wiederherstellen."""
-        # Signale temporär sperren, um kein versehentliches Speichern auszulösen
-        self._combo_box.blockSignals(True)
-        self._build_edit.blockSignals(True)
-        self._list.blockSignals(True)
-
+        """Gespeicherte UI-Zustände wiederherstellen (ohne Dialoge)."""
         version = self._settings.get("version", "")
         path = self._settings.get("path", "")
         selected = self._settings.get("selected", [])
 
-        # Version / Kanal wiederherstellen
-        for i in range(self._combo_box.count()):
-            if self._combo_box.itemText(i) == version:
-                self._combo_box.setCurrentIndex(i)
-                break
+        # Version / Kanal wiederherstellen (set() triggert keinen Command)
+        values = list(self._version_map.keys()) + [CUSTOM_PATH_LABEL]
+        if version in values:
+            self._version_menu.set(version)
+        else:
+            self._version_menu.set(values[0])
+            version = values[0]
 
-        self._build_edit.setText(path)
-        # Nur persistierte Auswahl anwenden, wenn sie gespeichert wurde;
-        # sonst Stand lassen (Default = alle angehakt beim ersten Start).
-        if selected:
-            self._restore_checked_items(selected)
-
-        self._combo_box.blockSignals(False)
-        self._build_edit.blockSignals(False)
-        self._list.blockSignals(False)
-
-        # _data_p4k anhand der wiederhergestellten Version aktualisieren
-        # (ohne Dateidialog — gleiche Logik wie _on_combo_changed, aber zeilenweise).
-        cur = self._combo_box.currentText()
-        v = self._version_map.get(cur)
-        if cur == "Eigener Pfad..." and path:
+        # _data_p4k + Build anhand der wiederhergestellten Auswahl setzen
+        if version == CUSTOM_PATH_LABEL and path and os.path.isdir(path):
             self._custom_folder = path
             self._data_p4k = os.path.join(path, "Data.p4k")
-        elif v:
-            self._custom_folder = None
-            self._data_p4k = v.data_p4k
+            try:
+                build = version_detection.find_build_number(path)
+            except Exception:
+                build = ""
+            self._build_entry.insert(0, build)
+        else:
+            v = self._version_map.get(version)
+            if v:
+                self._custom_folder = None
+                self._data_p4k = v.data_p4k
+                self._build_entry.insert(0, v.build_number)
+
+        # Gespeicherte Auswahl NUR anwenden, wenn sie nicht leer ist
+        # (sonst Standard beim Erststart: ALLE angehakt)
+        checked = set(selected) if selected else None
+        self._build_mod_list(checked_names=checked)
 
     def _save_settings(self):
-        """Aktuellen UI-Zustand in Settings speichern."""
-        if settings is None:
-            return
-        checked = [
-            self._list.item(i).text()
-            for i in range(self._list.count())
-            if self._list.item(i).checkState() == Qt.CheckState.Checked
-        ]
+        """Aktuellen UI-Zustand persistieren (selected / version / path)."""
+        checked = [name for name, var in self._checkboxes.items() if var.get()]
         data = {
             "selected": checked,
-            "version": self._combo_box.currentText(),
-            "path": self._build_edit.text(),
+            "version": self._version_menu.get(),
+            "path": self._custom_folder or "",
         }
-        settings.save_settings(self._settings_path, data)
-
-    def _restore_checked_items(self, selected_files: list[str]) -> None:
-        """CheckBox-Status der angegebenen Dateien wiederherstellen."""
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            if item is not None and item.text() in selected_files:
-                item.setCheckState(Qt.CheckState.Checked)
-            else:
-                item.setCheckState(Qt.CheckState.Unchecked)
-
-    # =============================================================== Liste
-
-    def _load_list(self):
-        """Mod-Dateien aus INI-Ordner laden."""
-        ini_dir = self._ini_dir  # immer App-INI als Quelle für die Liste
-
-        files = merge.list_mod_inis(ini_dir)
-        self._list.clear()
-
-        if not files:
-            item = QListWidgetItem("Keine .ini-Dateien — ziehe eine per Drag & Drop")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self._list.addItem(item)
-        else:
-            for fname in files:
-                self._add_to_list(fname)
-
-    def _add_to_list(self, text: str):
-        """Einzelnes QListWidgetItem mit Checkbox hinzufügen (Standard: angehakt)."""
-        item = QListWidgetItem(text)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Checked)  # Default: mod aktiviert
-        self._list.addItem(item)
-
-    def _refresh_list(self):
-        """Liste aktualisieren und alten Check-Status wiederherstellen."""
-        current_checked = [
-            self._list.item(i).text()
-            for i in range(self._list.count())
-            if self._list.item(i).checkState() == Qt.CheckState.Checked
-        ]
-        self._load_list()
-        self._restore_checked_items(current_checked)
-        self._save_settings()
-
-    def _remove_orphans(self):
-        """Items für nicht mehr existierende INI-Dateien entfernen."""
-        existing = set(merge.list_mod_inis(self._ini_dir))
-        indices_to_remove = []
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            if item is not None and item.text() not in existing:
-                indices_to_remove.append(i)
-        for i in reversed(indices_to_remove):
-            self._list.takeItem(i)
-
-    # =============================================================== Drag & Drop
-
-    def _on_drag_enter(self, event: QDragEnterEvent):
-        """Drag-Enter: .ini-URLs prüfen, visuelle Hervorhebung setzen."""
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if path.lower().endswith(".ini"):
-                    self._list.setProperty("draggable", True)
-                    self._list.style().unpolish(self._list)
-                    self._list.style().polish(self._list)
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
-
-    def _on_drag_leave(self, event):
-        """Drag-Leave: Hervorhebung entfernen."""
-        self._list.setProperty("draggable", False)
-        self._list.style().unpolish(self._list)
-        self._list.style().polish(self._list)
-
-    def _on_drop(self, event: QDropEvent):
-        """Drop-Event: .ini-Datei in INI-Ordner kopieren."""
-        urls = event.mimeData().urls()
-        source = None
-        for url in urls:
-            local = url.toLocalFile()
-            if local.lower().endswith(".ini"):
-                source = local
-                break
-
-        if source is None:
-            event.ignore()
-            return
-
-        name = os.path.basename(source)
-        target_path = os.path.join(self._ini_dir, name)
-
-        if os.path.exists(target_path):
-            if not self.confirm_drop_conflict(name):
-                self._update_status("Drop abgebrochen (Datei existiert)")
-                event.ignore()
-                return
-
-        if app_dirs is not None:
-            app_dirs.drop_ini_into(self._ini_dir, source)
-
-        self._refresh_list()
-        self._update_status(f"Datei '{name}' hinzugefügt")
-        event.acceptProposedAction()
-
-    def confirm_drop_conflict(self, name: str) -> bool:
-        """Nachfrage, ob existierende Datei überschrieben werden soll.
-
-        Rückgabe: True = Fortfahren, False = Abbrechen.
-        """
-        return (
-            QMessageBox.question(
-                self,
-                "Datei existiert",
-                f"Datei {name} wird überschrieben. Fortfahren?",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No,
-            )
-            == QMessageBox.StandardButton.Yes
-        )
-
-    # =============================================================== Löschen
-
-    def _on_delete_selected(self):
-        """Aktuell markierte Datei aus Liste und INI-Ordner löschen.
-
-        Löscht genau die in der Liste markierte (selektierte) Zeile —
-        NICHT alle angehakten Mods.
-        """
-        # Die aktive/markierte Zeile auswerten (User-Entscheidung),
-        # nicht den Checkbox-Status der Liste.
-        items = self._list.selectedItems()
-        if not items:
-            # Fallback: ohne Markierung nichts löschen (verhindert Versehen)
-            self._update_status("Keine Datei markiert — erst anklicken/auswählen")
-            return
-        fname = items[0].text()
-
-        if not merge.delete_mod_ini(self._ini_dir, fname):
-            self._update_status(f"'{fname}' konnte nicht gelöscht werden")
-            return
-
-        self._refresh_list()
-        self._update_status(f"'{fname}' gelöscht")
+        try:
+            settings.save_settings(self._settings_path, data)
+        except Exception:
+            # Persistenz-Fehler dürfen die GUI nicht crashen lassen
+            pass
 
     # =============================================================== Merge
-
     def _on_merge_clicked(self):
-        """Hauptaktion: Extrahieren + Mergen."""
-        self._merge_btn.setEnabled(False)
-        self._status_progress.setText("")
-        self._update_status("Arbeite...")
-        _ensure_qapp().processEvents()
+        """Hauptaktion: global.ini extrahieren + angehakten Mods mergen."""
+        self._merge_btn.configure(state="disabled")
+        self._set_status("Arbeite...")
+        self.update()
 
         try:
-            # 1. data_p4k ermitteln
+            # 1. Data.p4k muss vorhanden sein
             data_p4k = getattr(self, "_data_p4k", None)
             if not data_p4k or not os.path.isfile(data_p4k):
-                QMessageBox.warning(
+                messagebox.showwarning(
                     self,
                     "Data.p4k fehlt",
                     "Keine Data.p4k gefunden.\nBitte wähle einen gültigen "
-                    "Channel-Ordner über 'Eigener Pfad...'.",
+                    "Kanal im Dropdown oder einen eigenen Channel-Ordner "
+                    "über 'Eigener Pfad...'.",
                 )
-                self._update_status("Fehler: Data.p4k fehlt")
-                self._merge_btn.setEnabled(True)
+                self._set_status("Fehler: Data.p4k fehlt", error=True)
                 return
 
             # 2. Extrahieren (temporär im App-Datenordner)
-            tmp_base = os.path.join(
-                str(app_dirs.get_data_dir()), "tmp_global_base.ini"
-            )
-            self._status_progress.setText("Extrahiere global.ini...")
-            _ensure_qapp().processEvents()
+            tmp_base = os.path.join(str(app_dirs.get_data_dir()), "tmp_global_base.ini")
+            self._set_status("Extrahiere global.ini...")
+            self.update()
             rc = extract_global.extract_to(data_p4k, tmp_base)
             if rc != 0:
-                raise RuntimeError(
-                    f"Extraktion fehlgeschlagen (Rückgabe {rc})"
-                )
+                raise RuntimeError(f"Extraktion fehlgeschlagen (Rückgabe {rc})")
 
-            # 3. Ausgewählte Mod-Dateien ermitteln
-            #    (Lese-Fallback, falls App-INI-Ordner leer ist)
-            read_dir = self._fallback_dir or self._ini_dir
-            self._status_progress.setText("Lade Mod-Einstellungen...")
-            _ensure_qapp().processEvents()
-
-            selected_inis = []
-            for i in range(self._list.count()):
-                item = self._list.item(i)
-                if item is not None and (
-                    item.checkState() == Qt.CheckState.Checked
-                ):
-                    selected_inis.append(item.text())
-
+            # 3. Nur die ANGEHAKTEN Mod-Dateien laden
+            self._set_status("Lade Mod-Einstellungen...")
+            self.update()
+            selected_inis = [name for name, var in self._checkboxes.items() if var.get()]
             replacements = merge.load_selected_replacements(
-                read_dir, selected_inis
+                self._ini_dir, selected_inis
             )
 
-            # 4. Mergen → Output im App-Datenordner
-            self._status_progress.setText("Merge läuft...")
-            _ensure_qapp().processEvents()
+            # 4. Mergen → Output/global.ini
+            self._set_status("Merge läuft...")
+            self.update()
             out_path = os.path.join(self._output_dir, "global.ini")
             replaced, total = merge.merge(tmp_base, replacements, out_path)
 
-            # 5. tmp bereinigen
+            # 5. Temporäre Datei aufräumen
             if os.path.isfile(tmp_base):
                 os.remove(tmp_base)
 
             # 6. Erfolg
-            self._update_status(f"Fertig — {replaced} Werte ersetzt")
-            self._status_progress.setText(f"Gesamt: {total} Zeilen")
-            QMessageBox.information(
+            self._set_status(f"Fertig — {replaced} Werte ersetzt (Gesamt: {total} Zeilen)")
+            messagebox.showinfo(
                 self,
                 "Fertig",
                 f"Output/global.ini wurde erstellt.\n\n"
                 f"Ersetzte Werte: {replaced}\n"
                 f"Zeilen gesamt: {total}\n"
-                f"Mod-Dateien: {len(selected_inis)}",
+                f"Mod-Dateien: {len(selected_inis)}\n"
+                f"Pfad: {out_path}",
             )
 
         except FileNotFoundError as exc:
             self._handle_error(f"Datei nicht gefunden:\n{exc}")
         except Exception as exc:
-            self._handle_error(
-                f"Unerwarteter Fehler:\n{exc}",
-                detail=True,
-            )
+            self._handle_error(f"Unerwarteter Fehler:\n{exc}", detail=True)
         finally:
-            self._merge_btn.setEnabled(True)
-
-    # =============================================================== Fehler
+            self._merge_btn.configure(state="normal")
 
     def _handle_error(self, msg: str, detail: bool = False):
-        """Fehlermeldung anzeigen + Stack-Trace in Konsole."""
-        self._update_status("Fehler!")
-        self._status_progress.setText("")
+        """Fehlermeldung anzeigen + Status rot."""
+        self._set_status("Fehler!", error=True)
         if detail:
-            full_msg = f"{msg}\n\n{traceback.format_exc()}"
-        else:
-            full_msg = msg
-        QMessageBox.critical(self, "Fehler", full_msg)
-        self._merge_btn.setEnabled(True)
-
-    # =============================================================== Status
-
-    def _update_status(self, text: str):
-        """Status-Nachricht setzen (rot bei Fehler)."""
-        self._status_msg.setText(text)
-        if "Fehler" in text:
-            self._status_msg.setStyleSheet("color: #ff6666;")
-        else:
-            self._status_msg.setStyleSheet("")
+            msg = f"{msg}\n\n{traceback.format_exc()}"
+        messagebox.showerror(self, "Fehler", msg)
 
 
 # ---------------------------------------------------------------------------
-# create_app() — für Headless-Tests oder externen Aufruf
+# App-Start / Factory
 # ---------------------------------------------------------------------------
+def create_app() -> MainWindow:
+    """Factory: erzeugt das Hauptfenster (ohne mainloop).
 
-
-def create_app():
+    Rückgabe: MainWindow-Instanz. Der Aufrufer zeigt das Fenster an und
+    führt das Event-Loop aus (siehe __main__-Block) — dadurch bleibt die
+    Funktion in Tests (Xvfb/DISPLAY) gut handhabbar.
     """
-    Erzeugt QApplication + MainWindow und zeigt das Fenster.
-
-    Kann direkt aufgerufen werden (z. B. von einem Test) oder via __main__.
-    """
-    _ensure_qapp()
-    _apply_consistent_font()
-    _force_fusion_style()
-    win = MainWindow()
-    win.show()
-    return win
-
-
-def _force_fusion_style() -> None:
-    """Qt zwingt das Fusion-Theme zu verwenden (statt System-/GTK-Theme).
-
-    Ohne das waehlt Qt auf Linux-Desktops (GNOME/KDE) das System-Theme
-    (GTK3/xdg-desktop-portal), das die QSS-Farben ueberschreibt: Labels
-    werden dunkel, der Titel verliert seine Groesse. Fusion wendet das
-    QSS-Stylesheet zuverlaessig an — identisch auf Windows und Linux.
-    """
-    from PySide6.QtWidgets import QApplication as _QAppCls
-    app = QApplication.instance()
-    if app is None:
-        return
-    _QAppCls.setStyle("Fusion")
-
-
-def _apply_consistent_font() -> None:
-    """Einheitliche Schriftfamilie über alle Builds (Win + Linux).
-
-    Ohne explizite font-family nimmt Qt die System-Standardfont, die je nach
-    Plattform/Build unterschiedlich ist (Linux: Adwaita/Noto, Windows: Segoe UI,
-    GitHub-Runner ggf. abweichend). Das setzt eine feste Familie + Größe, damit
-    beide GitHub-Builds identisch aussehen.
-
-    Hinweis: 'font-family' in Qt-Stylesheets unterstützt KEINE Fallback-Listen,
-    daher wird die Familie hier programmatisch per OS aufgelöst.
-    """
-    from PySide6.QtGui import QFont, QFontDatabase
-    from PySide6.QtWidgets import QApplication as _QAppCls
-    app = QApplication.instance()
-    if app is None:
-        return
-    available = set(QFontDatabase.families())
-    if sys.platform == "win32":
-        family = "Segoe UI" if "Segoe UI" in available else "Tahoma"
-    else:
-        for cand in ("Noto Sans", "DejaVu Sans", "Liberation Sans"):
-            if cand in available:
-                family = cand
-                break
-        else:
-            family = app.font().family()
-    f = QFont(family, 10)  # ~13px, konsistent über beide OS
-    _QAppCls.setFont(f)  # statisch; app ist ein QApplication-Instanz
+    return MainWindow()
 
 
 if __name__ == "__main__":
-    win = create_app()
-    sys.exit(_ensure_qapp().exec())
+    app = create_app()
+    app.mainloop()
