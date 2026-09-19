@@ -936,9 +936,25 @@ def create_app():
     """
     _ensure_qapp()
     _apply_consistent_font()
+    _force_fusion_style()
     win = MainWindow()
     win.show()
     return win
+
+
+def _force_fusion_style() -> None:
+    """Qt zwingt das Fusion-Theme zu verwenden (statt System-/GTK-Theme).
+
+    Ohne das waehlt Qt auf Linux-Desktops (GNOME/KDE) das System-Theme
+    (GTK3/xdg-desktop-portal), das die QSS-Farben ueberschreibt: Labels
+    werden dunkel, der Titel verliert seine Groesse. Fusion wendet das
+    QSS-Stylesheet zuverlaessig an — identisch auf Windows und Linux.
+    """
+    from PySide6.QtWidgets import QApplication as _QAppCls
+    app = QApplication.instance()
+    if app is None:
+        return
+    _QAppCls.setStyle("Fusion")
 
 
 def _apply_consistent_font() -> None:
