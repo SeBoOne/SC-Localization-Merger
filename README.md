@@ -4,7 +4,28 @@ Ein Python/PySide6-GUI-Tool zum Extrahieren der *Star Citizen* `global.ini` aus 
 `Data.p4k` und zum Einmergen eigener Mod-Ini-Dateien zu einer gemeinsamen
 `Output/global.ini`.
 
-![Screenshot](screenshot.png) — *Screenshot folgt*
+> **This is an unofficial Star Citizen fan project, not affiliated with the Cloud Imperium group of companies.**
+> Für Details zu Star Citizen siehe <https://robertsspaceindustries.com>.
+
+## Fan-Localization
+
+Die mit diesem Tool erzeugten `Output/global.ini`-Dateien sind **Fan-Localizerungen**.
+Sie sind rein inoffiziell und werden von der Community für Community-Projekte erstellt.
+Die Ergebnisse stellen kein offizielles RSI/Cloud Imperium-Produkt dar.
+
+## App-Daten-Ordner
+
+Konfiguration (`ini/`), die `global.ini`-Inizialdatei und der `Output/`-Ordner liegen
+nicht mehr im Programmverzeichnis, sondern im **App-Daten-Ordner** des Nutzers:
+
+| OS | Pfad |
+|----|------|
+| Windows | `%USERPROFILE%\Documents\SC Localization Merger` |
+| Linux | `~/Documents/SC Localization Merger` (Fallback: `~/.SCLocalizationMerger`) |
+
+## Screenshot
+
+![Screenshot](screenshot.png) — *Made by the Community* (≥50 % Opacity, kein offizieller Look)
 
 ## Funktionsweise
 

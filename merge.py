@@ -148,5 +148,21 @@ def main() -> int:
     return 0
 
 
+def delete_mod_ini(ini_dir: str, filename: str) -> bool:
+    """
+    Entfernt eine einzelne Mod-*.ini*-Datei aus *ini_dir*.
+
+    Gibt ``True`` zurueck, wenn die Datei erfolgreich geloescht wurde,
+    ``False`` wenn sie nicht vorhanden ist oder nicht mit ``.ini`` endet.
+    """
+    if not filename.endswith(".ini"):
+        return False
+    path = os.path.join(ini_dir, filename)
+    if not os.path.isfile(path):
+        return False
+    os.remove(path)
+    return True
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -17,6 +17,8 @@ hiddenimports = [
     'p4k_reader',
     'extract_global',
     'version_detection',
+    'app_dirs',
+    'settings',
     'Crypto',
     'Crypto.Cipher',
     'Crypto.Cipher.AES',

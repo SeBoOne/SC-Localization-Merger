@@ -3,11 +3,11 @@
 SC Localization Merger — PySide6 GUI.
 
 Zwei-Klick-Workflow:
-  1. Kanal + Build auswaehlen (automatische Erkennung oder eigener Pfad).
-  2. Mod-Dateien aus dem ini/-Unterordner an-/abwaehlen.
-  3. „Extrahieren & Mergen" → Output/global.ini.
+  1. Kanal + Build auswählen (automatische Erkennung oder eigener Pfad).
+  2. Mod-Dateien aus dem App-INI-Ordner an-/abwählen.
+  3. „Extract & Merge" → Output/global.ini im App-Datenordner.
 
-Lauft auf Linux und Windows. Headless-faehig (QT_QPA_PLATFORM=offscreen).
+Läuft auf Linux und Windows. Headless-fähig (QT_QPA_PLATFORM=offscreen).
 """
 from __future__ import annotations
 
@@ -16,12 +16,26 @@ import sys
 import traceback
 from pathlib import Path
 
-# PySide6 als Modul + QApplication (QtWidgets nötig für Basisklasse QMainWindow)
-from PySide6 import QtWidgets
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction
+from PySide6.QtWidgets import (
+    QApplication,
+    QAbstractItemView,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
 
 # ---------------------------------------------------------------------------
-# QApplication: nur beim eigentlichen Start instantiiert (import ohne exec)
+# QApplication: nur beim eigentlichen Start instantiiert (Import ohne exec)
 # ---------------------------------------------------------------------------
 
 _QApp = None
@@ -38,11 +52,21 @@ def _ensure_qapp() -> "QApplication":
 
 
 # ---------------------------------------------------------------------------
-# Importe der Nachbarmodule (defensiv, version_detection fehlt evtl.)
+# Importe der Nachbarmodule (defensiv, falls noch nicht installiert)
 # ---------------------------------------------------------------------------
 
 import extract_global
 import merge
+
+try:
+    import app_dirs
+except ImportError:
+    app_dirs = None
+
+try:
+    import settings
+except ImportError:
+    settings = None
 
 try:
     import version_detection
@@ -54,17 +78,41 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _QSS = """
+/* --------------------------------------------------------------- Hauptfenster */
 QMainWindow {
     background-color: #1e1e1e;
 }
+
+/* --------------------------------------------------------------- Statusbar */
 QStatusBar {
     background-color: #1e1e1e;
     color: #cccccc;
     border-top: 1px solid #333333;
 }
+QStatusBar QLabel {
+    color: #aaaaaa;
+    font-size: 11px;
+}
 
-/* --------------------------------------------------------------- Kombobox
-   (Version-Auswahl) */
+/* --------------------------------------------------------------- QGroupBox */
+QGroupBox {
+    background-color: #252526;
+    border: 1px solid #333333;
+    border-radius: 4px;
+    margin-top: 8px;
+    padding-top: 12px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    color: #C8102E;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* --------------------------------------------------------------- QComboBox */
 QComboBox {
     background-color: #2d2d2d;
     color: #e0e0e0;
@@ -93,8 +141,7 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 
-/* --------------------------------------------------------------- Zeilen-
-   edit (Build-Nummer) */
+/* --------------------------------------------------------------- QLineEdit */
 QLineEdit {
     background-color: #2d2d2d;
     color: #e0e0e0;
@@ -106,8 +153,7 @@ QLineEdit:focus {
     border: 1px solid #C8102E;
 }
 
-/* --------------------------------------------------------------- List Widget
-   (Mod-Dateien) */
+/* --------------------------------------------------------------- QListWidget */
 QListWidget {
     background-color: #2d2d2d;
     color: #e0e0e0;
@@ -127,7 +173,12 @@ QListWidget::item:hover:!selected {
     background-color: #3a3a3a;
 }
 
-/* Checkboxes im QListWidget — Standard-QCheckBox in QListWidgetItem */
+/* Drop-Highlight: über Qt-Eigenschaft [draggable] gesteuert */
+QListWidget[draggable="true"] {
+    border: 2px solid #C8102E;
+}
+
+/* --------------------------------------------------------------- Checkbox */
 QCheckBox {
     color: #e0e0e0;
     spacing: 8px;
@@ -147,7 +198,7 @@ QCheckBox::indicator:hover {
     border-color: #ff6666;
 }
 
-/* --------------------------------------------------------------- Button */
+/* --------------------------------------------------------------- QPushButton */
 QPushButton {
     background-color: #C8102E;
     color: #ffffff;
@@ -168,7 +219,7 @@ QPushButton:disabled {
     color: #888888;
 }
 
-/* --------------------------------------------------------------- Labels */
+/* --------------------------------------------------------------- QLabel */
 QLabel {
     color: #e0e0e0;
 }
@@ -183,14 +234,10 @@ QLabel#section {
     color: #C8102E;
     padding-top: 6px;
 }
-QLabel#status {
-    color: #aaaaaa;
-    font-size: 11px;
-}
 """
 
 
-class MainWindow(QtWidgets.QMainWindow):
+class MainWindow(QMainWindow):
     """Hauptfenster des SC Localization Merger."""
 
     def __init__(self, parent=None):
@@ -201,14 +248,28 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.apply_qss()
 
-        # Projektordner
-        self._proj_dir = str(Path(__file__).resolve().parent)
+        assert app_dirs is not None, "app_dirs-Modul ist nicht verfügbar"
 
-        # ini/-Verzeichnis anlegen, falls nicht vorhanden
-        self._ini_dir = os.path.join(self._proj_dir, "ini")
-        os.makedirs(self._ini_dir, exist_ok=True)
+        # App-Datenverzeichnisse statt Projektordner
+        self._ini_dir = str(app_dirs.get_ini_dir())
+        self._output_dir = str(app_dirs.get_output_dir())
 
-        # Version-Erkennung (kann None sein)
+        # Projekt-ini-Ordner für Migration (nur beim ersten Start).
+        # Im PyInstaller-Frozen-Bundle existiert kein Projekt-ini — dann überspringen,
+        # sonst crasht die Migration mit FileNotFoundError (__file__ zeigt auf /tmp/_MEI...).
+        proj_ini = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "ini"
+        )
+        if app_dirs is not None and os.path.isdir(proj_ini):
+            app_dirs.migrate_project_inis(proj_ini)
+
+        # Prüfen, ob App-INI-Ordner leer ist → Projekt als Lese-Fallback
+        # (nur sinnvoll im Source-Lauf, wo ein Projekt-ini existieren kann).
+        self._fallback_dir = None
+        if os.path.isdir(proj_ini) and not os.listdir(self._ini_dir):
+            self._fallback_dir = proj_ini
+
+        # Version-Erkennung
         self._versions: list = []
         if version_detection is not None:
             try:
@@ -218,205 +279,198 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Widgets bauen
         self._combo_box = self._build_combo()
-        self._build_layout_wrapper = self._build_build_line()
+        self._build_edit = self._build_build_line()
         self._list = self._build_list()
         self._merge_btn = self._build_merge_button()
-        self._status_label = self._build_status()
+        self._status_bar = self._build_status_bar()
 
-        # Hauptlayout
+        # Mod-Liste einmalig befüllen (sonst bleibt sie leer, bis DnD/Refresh greift)
+        self._load_list()
+
+        # Layout
         main_layout = self._build_layout()
-        central = self._widget_from_layout(main_layout)
+        central = QWidget()
+        central.setLayout(main_layout)
         self.setCentralWidget(central)
 
-        # Status
-        self._update_status("Bereit — Kanal wählen")
+        # Signale verbinden
+        self._connect_signals()
 
-        # Build-Feld mit dem anfangs gewählten Kanal vorbelegen,
-        # aber nur wenn tatsächlich eine (auto-erkannte) Version gewählt ist.
-        if self._versions:
-            self._on_combo_changed(self._combo_box.currentIndex())
+        # Settings laden und UI vorbelegen
+        if settings is not None:
+            self._settings_path = str(app_dirs.get_settings_path())
+            self._load_settings()
+            self._restore_settings()
 
-    # --------------------------------------------------------------- QSS
+    # =============================================================== QSS
 
     def apply_qss(self):
         """QSS-Stylesheet auf das gesamte Fenster anwenden."""
         self.setStyleSheet(_QSS)
 
-    # --------------------------------------------------------------- Builder
+    # =============================================================== Builder
 
     def _build_combo(self):
         """QComboBox für die Versionsauswahl."""
-        from PySide6.QtWidgets import QComboBox, QLabel, QHBoxLayout
+        combobox = self._make_combobox()
 
-        combobox = QComboBox()
-        combobox.setMinimumHeight(32)
-
-        # Items: Label → SCVersion-Map
         self._version_map: dict[str, object] = {}
-        items = []
-
         for v in self._versions:
             base = os.path.basename(os.path.dirname(v.data_p4k))
             label = f"{v.channel} — {base}"
-            items.append(label)
             self._version_map[label] = v
 
-        # Marker für eigenen Pfad
-        items.append("Eigener Pfad...")
+        combobox.addItems(list(self._version_map.keys()) + ["Eigener Pfad..."])
+        if self._versions:
+            combobox.setCurrentIndex(0)
 
-        combobox.addItems(items)
-        # Standard: erster Eintrag; falls leer → letzter (Eigen)
-        if items:
-            combobox.setCurrentIndex(0 if items else len(items) - 1)
-
-        combobox.currentIndexChanged.connect(self._on_combo_changed)
-
-        # Layout mit Label
-        label = QLabel("Kanal:")
-        row = QHBoxLayout()
-        row.addWidget(label, 0)
-        row.addWidget(combobox, 1)
-        row.setContentsMargins(0, 0, 0, 0)
-
-        wrapper = self._widget_from_layout(row)
-        self._combo_wrapper = wrapper
         return combobox
 
     def _build_build_line(self):
         """QLineEdit für die Build-Nummer."""
-        from PySide6.QtWidgets import QLineEdit, QLabel, QHBoxLayout
-
-        edit = QLineEdit()
-        edit.setMinimumHeight(32)
+        edit = self._make_lineedit()
         edit.setPlaceholderText("Build-Nummer wird automatisch gesetzt")
-        self._build_edit = edit
-
-        label = QLabel("Build-Nummer:")
-        row = QHBoxLayout()
-        row.addWidget(label, 0)
-        row.addWidget(edit, 1)
-        row.setContentsMargins(0, 0, 0, 0)
-
-        wrapper = self._widget_from_layout(row)
-        return wrapper
+        return edit
 
     def _build_list(self):
         """QListWidget mit CheckBoxes für Mod-Dateien."""
-        from PySide6.QtWidgets import QListWidget
-        from PySide6.QtCore import Qt
-
         widget = QListWidget()
         widget.setMinimumHeight(200)
+        widget.setAcceptDrops(True)
+        widget.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        widget.setProperty("draggable", False)
 
-        mod_files = merge.list_mod_inis(self._ini_dir)
+        self._delete_action = QAction("Löschen", self)
+        widget.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        widget.addAction(self._delete_action)
+        self._delete_action.triggered.connect(self._on_delete_selected)
 
-        if not mod_files:
-            item = self._list_item("Keine .ini-Dateien in ini/ — lege eine ab")
-            item.setCheckState(Qt.CheckState.Unchecked)
-            widget.addItem(item)
-        else:
-            for fname in mod_files:
-                item = self._list_item(fname)
-                item.setCheckState(Qt.CheckState.Checked)  # Alle angehakt
-                widget.addItem(item)
+        widget.dragEnterEvent = self._on_drag_enter
+        widget.dragLeaveEvent = self._on_drag_leave
+        widget.dropEvent = self._on_drop
 
         return widget
 
-    def _list_item(self, text: str):
-        """QListWidgetItem mit Checkbox zurückgeben."""
-        from PySide6.QtWidgets import QListWidgetItem
-        from PySide6.QtCore import Qt
-
-        item = QListWidgetItem(text)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        return item
-
     def _build_merge_button(self):
-        """QPushButton „Extrahieren & Mergen"."""
-        from PySide6.QtWidgets import QPushButton
-
-        btn = QPushButton("Extrahieren & Mergen")
+        """QPushButton „Extract & Merge"."""
+        btn = QPushButton("Extract & Merge")
         btn.setMinimumHeight(40)
         btn.setMinimumWidth(200)
         return btn
 
-    def _build_status(self):
-        """QSatusbar für Fortschritt/Status."""
-        from PySide6.QtWidgets import QLabel
+    def _build_status_bar(self):
+        """QStatusBar mit Nachricht und Fortschritt."""
+        bar = QStatusBar()
+        self._status_msg = QLabel("")
+        self._status_progress = QLabel("")
+        bar.addWidget(self._status_msg)
+        bar.addPermanentWidget(self._status_progress)
+        self.setStatusBar(bar)
+        self._update_status("Bereit — Kanal wählen")
+        return bar
 
-        label = QLabel("")
-        label.setProperty("status", True)
-        label.setText("Status")
-        return label
-
-    # --------------------------------------------------------------- Layout
+    # =============================================================== Layout
 
     def _build_layout(self):
         """Hauptlayout zusammenbauen."""
-        from PySide6.QtWidgets import (
-            QVBoxLayout,
-            QHBoxLayout,
-            QLabel,
-        )
-
         # Titel
         title = QLabel("Star Citizen — global.ini Merger")
-        title.setProperty("title", True)
+        title.setObjectName("title")
+
+        # Fan-Kennzeichner (BEHALTEN)
+        fan_label = QLabel("Unofficial fan project")
+        fan_label.setObjectName("section")
 
         # Sektionen
-        section1 = QLabel("1. Kanal auswählen")
-        section1.setProperty("section", True)
+        s1 = QLabel("1. Star Citizen Version")
+        s1.setObjectName("section")
+        s2 = QLabel("2. Mod-Auswahl")
+        s2.setObjectName("section")
+        s3 = QLabel("3. Output & Aktion")
+        s3.setObjectName("section")
 
-        section2 = QLabel("2. Build-Nummer (optional editierbar)")
-        section2.setProperty("section", True)
-
-        section3 = QLabel("3. Mod-Dateien auswählen")
-        section3.setProperty("section", True)
-
-        # Button + Status
-        btn_status = QHBoxLayout()
-        btn_status.addStretch()
-        btn_status.addWidget(self._merge_btn)
-        btn_status.addWidget(self._status_label, 1)
-        btn_status.setContentsMargins(40, 10, 40, 0)
+        # QGroupBox-Styling (zweiter Weg über Stylesheet)
+        self.setStyleSheet(
+            _QSS
+            + """
+QGroupBox {
+    background-color: #252526;
+    border: 1px solid #333333;
+    border-radius: 4px;
+    margin-top: 8px;
+    padding-top: 12px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    color: #C8102E;
+    font-size: 12px;
+    font-weight: bold;
+}
+"""
+        )
 
         main = QVBoxLayout()
-        main.addWidget(title)
-        main.addSpacing(10)
-        main.addWidget(section1)
-        main.addWidget(self._combo_wrapper)
+        main.setSpacing(12)
         main.addSpacing(4)
-        main.addWidget(section2)
-        main.addWidget(self._build_layout_wrapper)
+        main.addWidget(title)
+        main.addWidget(fan_label)
+        main.addSpacing(4)
+
+        main.addWidget(s1)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Kanal:"))
+        row.addWidget(self._combo_box, 1)
+        main.addLayout(row)
+        main.addWidget(self._build_edit)
         main.addSpacing(8)
-        main.addWidget(section3)
+
+        main.addWidget(s2)
         main.addWidget(self._list)
-        main.addSpacing(16)
-        main.addLayout(btn_status)
+        main.addSpacing(8)
+
+        main.addWidget(s3)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self._merge_btn)
+        btn_row.setContentsMargins(40, 0, 40, 0)
+        main.addLayout(btn_row)
         main.addStretch()
         main.setContentsMargins(24, 16, 24, 16)
 
         return main
 
-    def _widget_from_layout(self, layout):
-        """Layout in ein QWidget einbetten."""
-        from PySide6.QtWidgets import QWidget
+    # =============================================================== Widgets
 
-        w = QWidget()
-        w.setLayout(layout)
-        return w
+    def _make_combobox(self):
+        """QComboBox erstellen."""
+        from PySide6.QtWidgets import QComboBox
 
-    # --------------------------------------------------------------- Signale
+        return QComboBox()
+
+    def _make_lineedit(self):
+        """QLineEdit erstellen."""
+        from PySide6.QtWidgets import QLineEdit
+
+        return QLineEdit()
+
+    # =============================================================== Signale
+
+    def _connect_signals(self):
+        """UI-Signale mit Speicherungs-Callback verbinden."""
+        self._merge_btn.clicked.connect(self._on_merge_clicked)
+        self._combo_box.currentIndexChanged.connect(self._on_combo_changed)
+        self._build_edit.textChanged.connect(self._save_settings)
+        self._list.itemChanged.connect(self._save_settings)
 
     def _on_combo_changed(self, index: int):
-        """Reagiert auf Kanalwechsel — Build-Feld aktualisieren."""
-        from PySide6.QtWidgets import QFileDialog
-
+        """Reagiert auf Kanalwechsel — Build-Feld aktualisieren + _data_p4k setzen."""
         items = self._combo_box.itemText(index)
 
         if items == "Eigener Pfad...":
-            self._build_edit.setText("")
-            # Ordner auswählen
+            # Ordner auswählen (Dateidialog nur auf Userverseite im Event)
             folder = QFileDialog.getExistingDirectory(
                 self,
                 "Channel-Ordner auswählen",
@@ -429,14 +483,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._combo_box.setCurrentIndex(max(0, index - 1))
                 self._combo_box.blockSignals(False)
                 self._update_status("Ordnerauswahl abgebrochen")
+                self._save_settings()
                 return
 
-            # data_p4k = <folder>/Data.p4k
             data_p4k = os.path.join(folder, "Data.p4k")
+            build_number = ""
             if version_detection is not None:
-                build_number = version_detection.find_build_number(folder)
-            else:
-                build_number = ""
+                try:
+                    build_number = version_detection.find_build_number(folder)
+                except Exception:
+                    build_number = ""
             self._build_edit.setText(build_number)
             self._custom_folder = folder
             self._data_p4k = data_p4k
@@ -447,19 +503,227 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._custom_folder = None
                 self._data_p4k = v.data_p4k
                 self._build_edit.setText(v.build_number)
-                self._update_status(
-                    f"{v.channel} — Build {v.build_number}"
-                )
+                self._update_status(f"{v.channel} — Build {v.build_number}")
             else:
                 self._update_status("Unbekannter Kanal-Eintrag")
 
+        # Version / Pfad in Settings speichern
+        self._save_settings()
+
+    def _load_settings(self):
+        if settings is None:
+            self._settings = {
+                "selected": [],
+                "version": "",
+                "path": "",
+            }
+        else:
+            self._settings = settings.load_settings(self._settings_path)
+
+    def _restore_settings(self):
+        """Gespeicherte UI-Zustände wiederherstellen."""
+        # Signale temporär sperren, um kein versehentliches Speichern auszulösen
+        self._combo_box.blockSignals(True)
+        self._build_edit.blockSignals(True)
+        self._list.blockSignals(True)
+
+        version = self._settings.get("version", "")
+        path = self._settings.get("path", "")
+        selected = self._settings.get("selected", [])
+
+        # Version / Kanal wiederherstellen
+        for i in range(self._combo_box.count()):
+            if self._combo_box.itemText(i) == version:
+                self._combo_box.setCurrentIndex(i)
+                break
+
+        self._build_edit.setText(path)
+        self._restore_checked_items(selected)
+
+        self._combo_box.blockSignals(False)
+        self._build_edit.blockSignals(False)
+        self._list.blockSignals(False)
+
+        # _data_p4k anhand der wiederhergestellten Version aktualisieren
+        # (ohne Dateidialog — gleiche Logik wie _on_combo_changed, aber zeilenweise).
+        cur = self._combo_box.currentText()
+        v = self._version_map.get(cur)
+        if cur == "Eigener Pfad..." and path:
+            self._custom_folder = path
+            self._data_p4k = os.path.join(path, "Data.p4k")
+        elif v:
+            self._custom_folder = None
+            self._data_p4k = v.data_p4k
+
+    def _save_settings(self):
+        """Aktuellen UI-Zustand in Settings speichern."""
+        if settings is None:
+            return
+        checked = [
+            self._list.item(i).text()
+            for i in range(self._list.count())
+            if self._list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+        data = {
+            "selected": checked,
+            "version": self._combo_box.currentText(),
+            "path": self._build_edit.text(),
+        }
+        settings.save_settings(self._settings_path, data)
+
+    def _restore_checked_items(self, selected_files: list[str]) -> None:
+        """CheckBox-Status der angegebenen Dateien wiederherstellen."""
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item is not None and item.text() in selected_files:
+                item.setCheckState(Qt.CheckState.Checked)
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+
+    # =============================================================== Liste
+
+    def _load_list(self):
+        """Mod-Dateien aus INI-Ordner laden."""
+        ini_dir = self._ini_dir  # immer App-INI als Quelle für die Liste
+
+        files = merge.list_mod_inis(ini_dir)
+        self._list.clear()
+
+        if not files:
+            item = QListWidgetItem("Keine .ini-Dateien — ziehe eine per Drag & Drop")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self._list.addItem(item)
+        else:
+            for fname in files:
+                self._add_to_list(fname)
+
+    def _add_to_list(self, text: str):
+        """Einzelnes QListWidgetItem mit Checkbox hinzufügen."""
+        item = QListWidgetItem(text)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Unchecked)
+        self._list.addItem(item)
+
+    def _refresh_list(self):
+        """Liste aktualisieren und alten Check-Status wiederherstellen."""
+        current_checked = [
+            self._list.item(i).text()
+            for i in range(self._list.count())
+            if self._list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+        self._load_list()
+        self._restore_checked_items(current_checked)
+        self._save_settings()
+
+    def _remove_orphans(self):
+        """Items für nicht mehr existierende INI-Dateien entfernen."""
+        existing = set(merge.list_mod_inis(self._ini_dir))
+        indices_to_remove = []
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item is not None and item.text() not in existing:
+                indices_to_remove.append(i)
+        for i in reversed(indices_to_remove):
+            self._list.takeItem(i)
+
+    # =============================================================== Drag & Drop
+
+    def _on_drag_enter(self, event: QDragEnterEvent):
+        """Drag-Enter: .ini-URLs prüfen, visuelle Hervorhebung setzen."""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                path = url.toLocalFile()
+                if path.lower().endswith(".ini"):
+                    self._list.setProperty("draggable", True)
+                    self._list.style().unpolish(self._list)
+                    self._list.style().polish(self._list)
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def _on_drag_leave(self, event):
+        """Drag-Leave: Hervorhebung entfernen."""
+        self._list.setProperty("draggable", False)
+        self._list.style().unpolish(self._list)
+        self._list.style().polish(self._list)
+
+    def _on_drop(self, event: QDropEvent):
+        """Drop-Event: .ini-Datei in INI-Ordner kopieren."""
+        urls = event.mimeData().urls()
+        source = None
+        for url in urls:
+            local = url.toLocalFile()
+            if local.lower().endswith(".ini"):
+                source = local
+                break
+
+        if source is None:
+            event.ignore()
+            return
+
+        name = os.path.basename(source)
+        target_path = os.path.join(self._ini_dir, name)
+
+        if os.path.exists(target_path):
+            if not self.confirm_drop_conflict(name):
+                self._update_status("Drop abgebrochen (Datei existiert)")
+                event.ignore()
+                return
+
+        if app_dirs is not None:
+            app_dirs.drop_ini_into(self._ini_dir, source)
+
+        self._refresh_list()
+        self._update_status(f"Datei '{name}' hinzugefügt")
+        event.acceptProposedAction()
+
+    def confirm_drop_conflict(self, name: str) -> bool:
+        """Nachfrage, ob existierende Datei überschrieben werden soll.
+
+        Rückgabe: True = Fortfahren, False = Abbrechen.
+        """
+        return (
+            QMessageBox.question(
+                self,
+                "Datei existiert",
+                f"Datei {name} wird überschrieben. Fortfahren?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+
+    # =============================================================== Löschen
+
+    def _on_delete_selected(self):
+        """Gewählte Datei(en) aus Liste und INI-Ordner löschen."""
+        checked = [
+            self._list.item(i).text()
+            for i in range(self._list.count())
+            if self._list.item(i).checkState() == Qt.CheckState.Checked
+        ]
+        if not checked:
+            return
+
+        # Prüfen, ob die letzte Datei eines Mods gelöscht wird
+        remaining = merge.list_mod_inis(self._ini_dir)
+        if len(remaining) == 1 and checked[0] in remaining:
+            if not self.confirm_drop_conflict(checked[0]):
+                return
+
+        for fname in checked:
+            merge.delete_mod_ini(self._ini_dir, fname)
+
+        self._refresh_list()
+        self._update_status("Datei(en) gelöscht")
+
+    # =============================================================== Merge
+
     def _on_merge_clicked(self):
         """Hauptaktion: Extrahieren + Mergen."""
-        from PySide6.QtWidgets import QMessageBox
-        from PySide6.QtCore import Qt
-
         self._merge_btn.setEnabled(False)
-        self._status_label.setText("Arbeite...")
+        self._status_progress.setText("")
+        self._update_status("Arbeite...")
         _ensure_qapp().processEvents()
 
         try:
@@ -472,14 +736,16 @@ class MainWindow(QtWidgets.QMainWindow):
                     "Keine Data.p4k gefunden.\nBitte wähle einen gültigen "
                     "Channel-Ordner über 'Eigener Pfad...'.",
                 )
-                self._status_label.setText("Fehler: Data.p4k fehlt")
+                self._update_status("Fehler: Data.p4k fehlt")
                 self._merge_btn.setEnabled(True)
                 return
 
-            # 2. Extrahieren
-            self._status_label.setText("Extrahiere global.ini...")
+            # 2. Extrahieren (temporär im App-Datenordner)
+            tmp_base = os.path.join(
+                str(app_dirs.get_data_dir()), "tmp_global_base.ini"
+            )
+            self._status_progress.setText("Extrahiere global.ini...")
             _ensure_qapp().processEvents()
-            tmp_base = os.path.join(self._proj_dir, "tmp_global_base.ini")
             rc = extract_global.extract_to(data_p4k, tmp_base)
             if rc != 0:
                 raise RuntimeError(
@@ -487,23 +753,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
 
             # 3. Ausgewählte Mod-Dateien ermitteln
-            self._status_label.setText("Lade Mod-Einstellungen...")
+            #    (Lese-Fallback, falls App-INI-Ordner leer ist)
+            read_dir = self._fallback_dir or self._ini_dir
+            self._status_progress.setText("Lade Mod-Einstellungen...")
             _ensure_qapp().processEvents()
 
             selected_inis = []
             for i in range(self._list.count()):
                 item = self._list.item(i)
-                if item.checkState() == Qt.CheckState.Checked:
+                if item is not None and (
+                    item.checkState() == Qt.CheckState.Checked
+                ):
                     selected_inis.append(item.text())
 
             replacements = merge.load_selected_replacements(
-                self._ini_dir, selected_inis
+                read_dir, selected_inis
             )
 
-            # 4. Mergen
-            self._status_label.setText("Merge läuft...")
+            # 4. Mergen → Output im App-Datenordner
+            self._status_progress.setText("Merge läuft...")
             _ensure_qapp().processEvents()
-            out_path = os.path.join(self._proj_dir, "Output", "global.ini")
+            out_path = os.path.join(self._output_dir, "global.ini")
             replaced, total = merge.merge(tmp_base, replacements, out_path)
 
             # 5. tmp bereinigen
@@ -511,7 +781,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 os.remove(tmp_base)
 
             # 6. Erfolg
-            self._status_label.setText(f"Fertig — {replaced} Werte ersetzt")
+            self._update_status(f"Fertig — {replaced} Werte ersetzt")
+            self._status_progress.setText(f"Gesamt: {total} Zeilen")
             QMessageBox.information(
                 self,
                 "Fertig",
@@ -531,11 +802,12 @@ class MainWindow(QtWidgets.QMainWindow):
         finally:
             self._merge_btn.setEnabled(True)
 
+    # =============================================================== Fehler
+
     def _handle_error(self, msg: str, detail: bool = False):
         """Fehlermeldung anzeigen + Stack-Trace in Konsole."""
-        from PySide6.QtWidgets import QMessageBox
-
-        self._status_label.setText("Fehler!")
+        self._update_status("Fehler!")
+        self._status_progress.setText("")
         if detail:
             full_msg = f"{msg}\n\n{traceback.format_exc()}"
         else:
@@ -543,14 +815,21 @@ class MainWindow(QtWidgets.QMainWindow):
         QMessageBox.critical(self, "Fehler", full_msg)
         self._merge_btn.setEnabled(True)
 
+    # =============================================================== Status
+
     def _update_status(self, text: str):
-        """Statusleiste aktualisieren."""
-        self._status_label.setText(text)
+        """Status-Nachricht setzen (rot bei Fehler)."""
+        self._status_msg.setText(text)
+        if "Fehler" in text:
+            self._status_msg.setStyleSheet("color: #ff6666;")
+        else:
+            self._status_msg.setStyleSheet("")
 
 
 # ---------------------------------------------------------------------------
 # create_app() — für Headless-Tests oder externen Aufruf
 # ---------------------------------------------------------------------------
+
 
 def create_app():
     """
@@ -561,8 +840,6 @@ def create_app():
     _ensure_qapp()
     win = MainWindow()
     win.show()
-    # Merge-Button Signal verbinden
-    win._merge_btn.clicked.connect(win._on_merge_clicked)
     return win
 
 
