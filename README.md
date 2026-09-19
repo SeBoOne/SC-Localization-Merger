@@ -27,6 +27,24 @@ nicht mehr im Programmverzeichnis, sondern im **App-Daten-Ordner** des Nutzers:
 
 ![Screenshot](screenshot.png) — *Made by the Community* (≥50 % Opacity, kein offizieller Look)
 
+## Mod-Ini-Quellen (Community)
+
+Deine eigenen Übersetzungs-Mods werden in den `ini/`-Ordner gelegt (je eine Datei pro
+Bestandteil). Eine gute Quelle für fertige, gepflegte Community-Übersetzungen ist
+**[MrKraken's StarStrings](https://github.com/MrKraken/StarStrings)**:
+
+- Bietet eine **komplette** `global.ini`-Übersetzung sowie die **einzelnen Bestandteile**
+  (z. B. Contracts, Items, Journal, Mining) als separate `.ini`-Dateien.
+- Wird bei jedem SC-Patch aktualisiert — **nach jedem Update auf einen neuen Build
+  prüfen** (im Readme steht „check for an update every patch").
+- Download im [Releases-Bereich](https://github.com/MrKraken/StarStrings/releases)
+  (`StarStrings-LIVE.zip`, auseinandergezogen nach Bedarf in den `ini/`-Ordner).
+- Wenn du Teile verschiedener Übersetzungspacks kombinieren möchtest, ist zusätzlich
+  **[StarMeld](https://beltakoda.github.io/StarMeld/)** (webbasiert) hilfreich.
+
+> Hinweis: Diese Übersetzungen sind wie auch dieses Tool rein inoffizielle
+> Community-Projekte — nicht verbunden mit RSI/Cloud Imperium, Nutzung auf eigene Gefahr.
+
 ## Funktionsweise
 
 - **Mod-Ini-Dateien**: Der Ordner `ini/` enthält die `.ini`-Dateien der einzelnen Mods.
