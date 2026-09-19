@@ -18,6 +18,8 @@ hiddenimports = [
     'customtkinter',
     'PIL',
     'PIL.Image',
+    'PIL.ImageTk',
+    'PIL._tkinter_finder',
     'merge',
     'p4k_reader',
     'extract_global',
