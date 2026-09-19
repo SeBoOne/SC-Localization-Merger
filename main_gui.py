@@ -948,9 +948,40 @@ def create_app():
     Kann direkt aufgerufen werden (z. B. von einem Test) oder via __main__.
     """
     _ensure_qapp()
+    _apply_consistent_font()
     win = MainWindow()
     win.show()
     return win
+
+
+def _apply_consistent_font() -> None:
+    """Einheitliche Schriftfamilie über alle Builds (Win + Linux).
+
+    Ohne explizite font-family nimmt Qt die System-Standardfont, die je nach
+    Plattform/Build unterschiedlich ist (Linux: Adwaita/Noto, Windows: Segoe UI,
+    GitHub-Runner ggf. abweichend). Das setzt eine feste Familie + Größe, damit
+    beide GitHub-Builds identisch aussehen.
+
+    Hinweis: 'font-family' in Qt-Stylesheets unterstützt KEINE Fallback-Listen,
+    daher wird die Familie hier programmatisch per OS aufgelöst.
+    """
+    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtWidgets import QApplication as _QAppCls
+    app = QApplication.instance()
+    if app is None:
+        return
+    available = set(QFontDatabase.families())
+    if sys.platform == "win32":
+        family = "Segoe UI" if "Segoe UI" in available else "Tahoma"
+    else:
+        for cand in ("Noto Sans", "DejaVu Sans", "Liberation Sans"):
+            if cand in available:
+                family = cand
+                break
+        else:
+            family = app.font().family()
+    f = QFont(family, 10)  # ~13px, konsistent über beide OS
+    _QAppCls.setFont(f)  # statisch; app ist ein QApplication-Instanz
 
 
 if __name__ == "__main__":
