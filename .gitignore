@@ -23,12 +23,9 @@ dist/
 # Altlast (durch PyInstaller-Build bzw. merge.py ersetzt — nicht committen)
 SC_GlobalIni_Extractor.exe
 merge.ps1
-# Root-Kopien der Mod-Inis (kanonische Form in ini/, s. Konvention)
-/components.ini
-/contracts.ini
-/mining.ini
-/modified_ships.ini
-/ordnance.ini
+# Mod-Ini-Dateien: gehoeren dem Nutzer (teils fremde Inhalte), NIE ins Repo.
+# Laden in ~/Documents/SC Localization Merger/ini/ bzw. ~/.SCLocalizationMerger/ini/
+ini/
 
 # Sonstiges
 *.spec.backup
