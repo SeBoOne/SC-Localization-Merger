@@ -19,8 +19,11 @@ Testbarkeit:
 from __future__ import annotations
 
 import os
+import queue
 import subprocess
 import sys
+import threading
+import time
 import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox
@@ -51,6 +54,7 @@ BG_NEUTRAL_HOVER = "#3D3D44"
 TEXT_MAIN = "#EAEAEA"         # Haupttext
 TEXT_DIM = "#9A9A9A"          # Sekundärtext (Hinweise, Output-Pfad)
 ERROR_RED = "#FF5C5C"         # Fehler in der Statusleiste
+SUCCESS_GREEN = "#2ECC71"     # Erfolg-Haken im Ergebnis-Overlay
 
 CUSTOM_PATH_LABEL = "Eigener Pfad..."  # Label im Versions-Dropdown für eigenen Pfad
 
@@ -650,89 +654,208 @@ class MainWindow(ctk.CTk):
 
     # =============================================================== Merge
     def _on_merge_clicked(self):
-        """Hauptaktion: global.ini extrahieren + angehakten Mods mergen."""
+        """Hauptaktion: global.ini extrahieren + angehakten Mods mergen.
+
+        Der Merge läuft in einem Hintergrund-Thread; ein modales Overlay mit
+        Lade-Spinner wird gezeigt und blockiert alle anderen Steuerelemente.
+        Am Ende wird der Spinner grün (Haken) bzw. rot (Kreuz); das Overlay
+        schließt sich nach 3 Sekunden automatisch.
+        """
+        # --- (1) Schnelle Vorprüfung synchron, OHNE Overlay/Thread ---
+        data_p4k = getattr(self, "_data_p4k", None)
+        if not data_p4k or not os.path.isfile(data_p4k):
+            messagebox.showwarning(
+                "Data.p4k fehlt",
+                "Keine Data.p4k gefunden.\nBitte wähle einen gültigen "
+                "Kanal im Dropdown oder einen eigenen Channel-Ordner "
+                "über 'Eigener Pfad...'.",
+                parent=self,
+            )
+            self._set_status("Fehler: Data.p4k fehlt", error=True)
+            return
+
+        # --- (2) Falls schon ein Overlay aktiv ist, nicht neu starten ---
+        if getattr(self, "_overlay_open", False):
+            return
+
         self._merge_btn.configure(state="disabled")
-        self._set_status("Arbeite...")
-        self.update()
+        self._work_queue = queue.Queue()
+        self._show_overlay(phase="Arbeite...")
 
+        worker = threading.Thread(
+            target=self._merge_worker,
+            args=(data_p4k,),
+            daemon=True,
+        )
+        worker.start()
+        self._poll_merge_worker()
+
+    def _merge_worker(self, data_p4k: str):
+        """Führt Extraktion + Merge aus (im Hintergrund-Thread).
+
+        Schiebt Phasen-Statusmeldungen und das Endergebnis in die Queue.
+        Greift NICHT direkt auf Widgets zu (CustomTkinter ist nicht
+        thread-safe) — der Poller im Main-Thread übernimmt alle UI-Updates.
+        """
+        q = self._work_queue
         try:
-            # 1. Data.p4k muss vorhanden sein
-            data_p4k = getattr(self, "_data_p4k", None)
-            if not data_p4k or not os.path.isfile(data_p4k):
-                messagebox.showwarning(
-                    "Data.p4k fehlt",
-                    "Keine Data.p4k gefunden.\nBitte wähle einen gültigen "
-                    "Kanal im Dropdown oder einen eigenen Channel-Ordner "
-                    "über 'Eigener Pfad...'.",
-                    parent=self,
-                )
-                self._set_status("Fehler: Data.p4k fehlt", error=True)
-                return
-
-            # 2. Extrahieren (temporär im App-Datenordner)
-            tmp_base = os.path.join(str(app_dirs.get_data_dir()), "tmp_global_base.ini")
-            self._set_status("Extrahiere global.ini...")
-            self.update()
+            q.put(("phase", "Extrahiere global.ini..."))
+            tmp_base = os.path.join(
+                str(app_dirs.get_data_dir()), "tmp_global_base.ini"
+            )
             rc = extract_global.extract_to(data_p4k, tmp_base)
             if rc != 0:
                 raise RuntimeError(f"Extraktion fehlgeschlagen (Rückgabe {rc})")
 
-            # 3. Nur die ANGEHAKTEN Mod-Dateien laden
-            self._set_status("Lade Mod-Einstellungen...")
-            self.update()
-            selected_inis = [name for name, var in self._checkboxes.items() if var.get()]
+            q.put(("phase", "Lade Mod-Einstellungen..."))
+            selected_inis = [
+                name for name, var in self._checkboxes.items() if var.get()
+            ]
             replacements = merge.load_selected_replacements(
                 self._ini_dir, selected_inis
             )
 
-            # 4. Mergen → Output/global.ini
-            self._set_status("Merge läuft...")
-            self.update()
+            q.put(("phase", "Merge läuft..."))
             out_path = os.path.join(self._output_dir, "global.ini")
             replaced, total = merge.merge(tmp_base, replacements, out_path)
 
-            # 5. Temporäre Datei aufräumen
             if os.path.isfile(tmp_base):
                 os.remove(tmp_base)
 
-            # 6. Erfolg
-            self._set_status(f"Fertig — {replaced} Werte ersetzt (Gesamt: {total} Zeilen)")
-            messagebox.showinfo(
-                    "Fertig",
-                    f"Output/global.ini wurde erstellt.\n\n"
-                    f"Ersetzte Werte: {replaced}\n"
-                    f"Zeilen gesamt: {total}\n"
-                    f"Mod-Dateien: {len(selected_inis)}\n"
-                    f"Pfad: {out_path}",
-                    parent=self,
-                )
-
+            q.put((
+                "result", "ok",
+                f"Ersetzte Werte: {replaced}\n"
+                f"Zeilen gesamt: {total}\n"
+                f"Mod-Dateien: {len(selected_inis)}\n"
+                f"Output: {out_path}",
+            ))
         except FileNotFoundError as exc:
-            self._handle_error(f"Datei nicht gefunden:\n{exc}")
+            q.put(("result", "err", f"Datei nicht gefunden:\n{exc}"))
         except Exception as exc:
-            self._handle_error(f"Unerwarteter Fehler: {exc}", detail=True)
-        finally:
-            self._merge_btn.configure(state="normal")
+            q.put(("result", "err", f"{exc}\n{traceback.format_exc()}"))
 
-    def _handle_error(self, msg: str, detail: bool = False):
-        """Fehlermeldung in der Statusleiste zeigen + in Logdatei schreiben."""
-        if detail:
-            msg = f"{msg}\n{traceback.format_exc()}"
-        # Konkreten Fehlertext zeigen: letzte aussagekraefige Zeile statt "Fehler!"
-        head = msg.splitlines()[0] if msg.splitlines() else msg
-        self._set_status(f"Fehler: {head}", error=True)
-        # Vollen Traceback in eine Logdatei schreiben (fuer Diagnose)
+    def _poll_merge_worker(self):
+        """Main-Thread: liest Queue, aktualisiert Overlay, triggert sich erneut."""
+        try:
+            while True:
+                kind, *rest = self._work_queue.get_nowait()
+                if kind == "phase":
+                    self._set_overlay_phase(rest[0])
+                elif kind == "result":
+                    status, text = rest[0], rest[1]
+                    self._finish_merge(status, text)
+                    return  # fertig, kein Weiter-Pollen
+        except queue.Empty:
+            pass
+        self.after(120, self._poll_merge_worker)
+
+    # ------------------------------------------------------------------
+    # Modales Ergebnis-Overlay (im App-Stil)
+    # ------------------------------------------------------------------
+    def _show_overlay(self, phase: str):
+        """Zeigt ein modales Overlay-Fenster mit Lade-Spinner über der App."""
+        self._overlay_open = True
+        top = ctk.CTkToplevel(self)
+        top.title("")
+        top.geometry("360x200")
+        top.resizable(False, False)
+        top.configure(fg_color=BG_CARD)
+        try:
+            top.transient(self)
+            top.grab_set()  # blockiert alle anderen Steuerelemente
+            top.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        # Spinner-Label (Animations-String wird per after() rotiert)
+        self._overlay_spinner = ctk.CTkLabel(
+            top, text="", font=("Segoe UI", 42),
+            text_color=ACCENT, width=90, height=70,
+        )
+        self._overlay_spinner.pack(pady=(18, 4))
+        self._overlay_phase = ctk.CTkLabel(
+            top, text=phase, font=self._font_body,
+            text_color=TEXT_MAIN, anchor="center",
+        )
+        self._overlay_phase.pack(pady=(0, 2))
+
+        self._overlay_top = top
+        self._overlay_spin_i = 0
+        self._overlay_after = None
+        self._spin_chars = ["⚙ ", "⟳", "◒", "… ", "●"]
+        self._rotate_spinner()
+
+    def _rotate_spinner(self):
+        """Rotiert das Ladesymbol (nur solange das Overlay im Arbeitsmodus ist)."""
+        if not getattr(self, "_overlay_open", False):
+            return
+        if getattr(self, "_overlay_done", False):
+            return
+        frames = ["⟳", "…", "⚙", "◒", "⋯"]
+        self._overlay_spinner.configure(
+            text=frames[self._overlay_spin_i % len(frames)]
+        )
+        self._overlay_spin_i += 1
+        self._overlay_after = self.after(180, self._rotate_spinner)
+
+    def _set_overlay_phase(self, text: str):
+        """Aktualisiert den Phasen-Text des Overlays (Main-Thread)."""
+        if not getattr(self, "_overlay_open", False):
+            return
+        self._overlay_phase.configure(text=text)
+
+    def _finish_merge(self, status: str, text: str):
+        """Abschluss: Spinner → Haken/Kreuz, Ergebnistext, nach 3s schließen."""
+        if not getattr(self, "_overlay_open", False):
+            return
+        self._overlay_done = True
+        if self._overlay_after:
+            self.after_cancel(self._overlay_after)
+            self._overlay_after = None
+
+        ok = status == "ok"
+        symbol = "✔" if ok else "✘"
+        color = SUCCESS_GREEN if ok else ERROR_RED
+        self._overlay_spinner.configure(text=symbol, text_color=color)
+        self._overlay_phase.configure(
+            text=text,
+            text_color=TEXT_MAIN,
+            justify="left",
+            wraplength=320,
+        )
+
+        # Statusleiste setzen
+        if ok:
+            first = text.splitlines()[0] if text else ""
+            self._set_status(f"Fertig — {first}")
+        else:
+            head = text.splitlines()[0] if text.splitlines() else text
+            self._set_status(f"Fehler: {head}", error=True)
+            self._write_error_log(text)
+
+        self._merge_btn.configure(state="normal")
+        self.after(3000, self._close_overlay)
+
+    def _close_overlay(self):
+        """Schließt das Overlay und hebt die Sperre auf."""
+        if not getattr(self, "_overlay_open", False):
+            return
+        try:
+            self._overlay_top.grab_release()
+            self._overlay_top.destroy()
+        except Exception:
+            pass
+        self._overlay_open = False
+        self._overlay_done = False
+
+    def _write_error_log(self, msg: str):
+        """Schreibt den vollen Traceback in die Logdatei (Diagnose)."""
         try:
             logp = os.path.join(str(app_dirs.get_data_dir()), "error.log")
             with open(logp, "a", encoding="utf-8") as fh:
                 fh.write("=" * 60 + "\n")
                 fh.write(msg + "\n")
-        except Exception:
-            pass
-        print(f"[SC-Merger] {msg}", file=sys.stderr)
-        # Popup: volle Fehlermeldung zeigen (Nutzer sieht die Ursache direkt)
-        try:
-            messagebox.showerror("Fehler", msg, parent=self)
+            print(f"[SC-Merger] {msg}", file=sys.stderr)
         except Exception:
             pass
 
