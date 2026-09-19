@@ -16,8 +16,9 @@ import sys
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QAction
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -203,7 +204,7 @@ QPushButton {
     background-color: #C8102E;
     color: #ffffff;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 8px 20px;
     font-weight: bold;
     font-size: 13px;
@@ -219,20 +220,62 @@ QPushButton:disabled {
     color: #888888;
 }
 
+/* Sekundär-/Neutral-Button (z.B. "Output-Ordner öffnen") */
+QPushButton:not(#primary_btn):not(#reload_btn) {
+    background-color: #333333;
+    color: #e0e0e0;
+    border: 1px solid #4a4a4a;
+    font-weight: normal;
+}
+QPushButton:not(#primary_btn):not(#reload_btn):hover {
+    background-color: #3d3d3d;
+    border-color: #C8102E;
+}
+QPushButton:not(#primary_btn):not(#reload_btn):pressed {
+    background-color: #2a2a2a;
+}
+
+/* Kleiner Reload-Button (runde Form) */
+QPushButton#reload_btn {
+    background-color: #333333;
+    color: #C8102E;
+    border: 1px solid #4a4a4a;
+    border-radius: 13px;
+    font-size: 15px;
+    font-weight: bold;
+    padding: 0;
+}
+QPushButton#reload_btn:hover {
+    background-color: #3d3d3d;
+    border-color: #C8102E;
+}
+
 /* --------------------------------------------------------------- QLabel */
 QLabel {
     color: #e0e0e0;
 }
 QLabel#title {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: bold;
     color: #ffffff;
+    letter-spacing: 0.5px;
 }
 QLabel#section {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: bold;
     color: #C8102E;
-    padding-top: 6px;
+    padding-top: 8px;
+    border-bottom: 1px solid #333333;
+    padding-bottom: 4px;
+}
+QLabel#output_path {
+    color: #9a9a9a;
+    font-family: monospace;
+    font-size: 11px;
+    background-color: #232323;
+    border: 1px solid #333333;
+    border-radius: 4px;
+    padding: 6px 8px;
 }
 """
 
@@ -282,6 +325,11 @@ class MainWindow(QMainWindow):
         self._build_edit = self._build_build_line()
         self._list = self._build_list()
         self._merge_btn = self._build_merge_button()
+        self._open_output_btn = self._build_open_output_button()
+        self._reload_btn = self._build_reload_button()
+        self._output_path_label = QLabel("")
+        self._output_path_label.setObjectName("output_path")
+        self._output_path_label.setWordWrap(True)
         self._status_bar = self._build_status_bar()
 
         # Mod-Liste einmalig befüllen (sonst bleibt sie leer, bis DnD/Refresh greift)
@@ -355,8 +403,49 @@ class MainWindow(QMainWindow):
         """QPushButton „Extract & Merge"."""
         btn = QPushButton("Extract & Merge")
         btn.setMinimumHeight(40)
-        btn.setMinimumWidth(200)
+        btn.setMinimumWidth(220)
+        btn.setObjectName("primary_btn")
         return btn
+
+    def _build_open_output_button(self):
+        """QPushButton „Output-Ordner öffnen"."""
+        btn = QPushButton("Output-Ordner öffnen")
+        btn.setMinimumHeight(36)
+        btn.setMinimumWidth(200)
+        btn.setToolTip(
+            "Öffnet den Ordner, in dem die gemergte global.ini "
+            "abgelegt wird (App-Datenordner/Output)."
+        )
+        return btn
+
+    def _build_reload_button(self):
+        """Kleiner Reload-Button über der Mod-Liste (Neu einlesen des ini/-Ordners)."""
+        btn = QPushButton("↻")
+        btn.setFixedSize(30, 26)
+        btn.setToolTip(
+            "Mod-Liste neu laden — prüft den ini/-Ordner auf neue/entfernte Dateien"
+        )
+        btn.setObjectName("reload_btn")
+        return btn
+
+    def _on_reload_clicked(self):
+        """Mods neu aus dem ini/-Ordner einlesen (Checkstand bleibt erhalten)."""
+        self._list.blockSignals(True)
+        self._refresh_list()
+        self._list.blockSignals(False)
+        self._update_status("Mod-Liste neu geladen")
+
+    def _on_open_output(self):
+        """Öffnet den Output-Ordner im Dateimanager."""
+        out_dir = self._output_dir
+        if not os.path.isdir(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+        _ensure_qapp().processEvents()
+        url = QUrl.fromLocalFile(out_dir)
+        if not QDesktopServices.openUrl(url):
+            self._update_status(f"Konnte '{out_dir}' nicht öffnen")
+            return
+        self._update_status("Output-Ordner geöffnet")
 
     def _build_status_bar(self):
         """QStatusBar mit Nachricht und Fortschritt."""
@@ -374,7 +463,7 @@ class MainWindow(QMainWindow):
     def _build_layout(self):
         """Hauptlayout zusammenbauen."""
         # Titel
-        title = QLabel("Star Citizen — global.ini Merger")
+        title = QLabel("SC Localization Merger")
         title.setObjectName("title")
 
         # Fan-Kennzeichner (BEHALTEN)
@@ -419,6 +508,7 @@ QGroupBox::title {
         main.addWidget(fan_label)
         main.addSpacing(4)
 
+        # 1. Star Citizen Version
         main.addWidget(s1)
         row = QHBoxLayout()
         row.addWidget(QLabel("Kanal:"))
@@ -427,19 +517,28 @@ QGroupBox::title {
         main.addWidget(self._build_edit)
         main.addSpacing(8)
 
-        main.addWidget(s2)
+        # 2. Mod-Auswahl (+ Reload-Button rechts in derselben Zeile)
+        mod_header = QHBoxLayout()
+        mod_header.addWidget(s2)
+        mod_header.addStretch()
+        mod_header.addWidget(self._reload_btn)
+        main.addLayout(mod_header)
         main.addWidget(self._list)
         main.addSpacing(8)
 
+        # 3. Output & Aktion (Output-Pfad inline + Aktion beibehalten)
         main.addWidget(s3)
+        main.addWidget(self._output_path_label)
         btn_row = QHBoxLayout()
-        btn_row.addStretch()
+        btn_row.addWidget(self._open_output_btn)
         btn_row.addWidget(self._merge_btn)
-        btn_row.setContentsMargins(40, 0, 40, 0)
+        btn_row.addStretch()
         main.addLayout(btn_row)
         main.addStretch()
         main.setContentsMargins(24, 16, 24, 16)
 
+        # Outputpfad nach Layout verfügbar machen
+        self._output_path_label.setText(f"Output: {self._output_dir}")
         return main
 
     # =============================================================== Widgets
@@ -461,6 +560,8 @@ QGroupBox::title {
     def _connect_signals(self):
         """UI-Signale mit Speicherungs-Callback verbinden."""
         self._merge_btn.clicked.connect(self._on_merge_clicked)
+        self._reload_btn.clicked.connect(self._on_reload_clicked)
+        self._open_output_btn.clicked.connect(self._on_open_output)
         self._combo_box.currentIndexChanged.connect(self._on_combo_changed)
         self._build_edit.textChanged.connect(self._save_settings)
         self._list.itemChanged.connect(self._save_settings)
@@ -538,7 +639,10 @@ QGroupBox::title {
                 break
 
         self._build_edit.setText(path)
-        self._restore_checked_items(selected)
+        # Nur persistierte Auswahl anwenden, wenn sie gespeichert wurde;
+        # sonst Stand lassen (Default = alle angehakt beim ersten Start).
+        if selected:
+            self._restore_checked_items(selected)
 
         self._combo_box.blockSignals(False)
         self._build_edit.blockSignals(False)
@@ -598,10 +702,10 @@ QGroupBox::title {
                 self._add_to_list(fname)
 
     def _add_to_list(self, text: str):
-        """Einzelnes QListWidgetItem mit Checkbox hinzufügen."""
+        """Einzelnes QListWidgetItem mit Checkbox hinzufügen (Standard: angehakt)."""
         item = QListWidgetItem(text)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Unchecked)
+        item.setCheckState(Qt.CheckState.Checked)  # Default: mod aktiviert
         self._list.addItem(item)
 
     def _refresh_list(self):
@@ -696,26 +800,26 @@ QGroupBox::title {
     # =============================================================== Löschen
 
     def _on_delete_selected(self):
-        """Gewählte Datei(en) aus Liste und INI-Ordner löschen."""
-        checked = [
-            self._list.item(i).text()
-            for i in range(self._list.count())
-            if self._list.item(i).checkState() == Qt.CheckState.Checked
-        ]
-        if not checked:
+        """Aktuell markierte Datei aus Liste und INI-Ordner löschen.
+
+        Löscht genau die in der Liste markierte (selektierte) Zeile —
+        NICHT alle angehakten Mods.
+        """
+        # Die aktive/markierte Zeile auswerten (User-Entscheidung),
+        # nicht den Checkbox-Status der Liste.
+        items = self._list.selectedItems()
+        if not items:
+            # Fallback: ohne Markierung nichts löschen (verhindert Versehen)
+            self._update_status("Keine Datei markiert — erst anklicken/auswählen")
+            return
+        fname = items[0].text()
+
+        if not merge.delete_mod_ini(self._ini_dir, fname):
+            self._update_status(f"'{fname}' konnte nicht gelöscht werden")
             return
 
-        # Prüfen, ob die letzte Datei eines Mods gelöscht wird
-        remaining = merge.list_mod_inis(self._ini_dir)
-        if len(remaining) == 1 and checked[0] in remaining:
-            if not self.confirm_drop_conflict(checked[0]):
-                return
-
-        for fname in checked:
-            merge.delete_mod_ini(self._ini_dir, fname)
-
         self._refresh_list()
-        self._update_status("Datei(en) gelöscht")
+        self._update_status(f"'{fname}' gelöscht")
 
     # =============================================================== Merge
 
