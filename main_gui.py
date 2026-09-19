@@ -753,33 +753,36 @@ class MainWindow(ctk.CTk):
     # Modales Ergebnis-Overlay (im App-Stil)
     # ------------------------------------------------------------------
     def _show_overlay(self, phase: str):
-        """Zeigt ein modales Overlay-Fenster mit Lade-Spinner über der App."""
+        """Zeigt ein modales Overlay über der App (eingebettet im Hauptfenster).
+
+        Statt eines separaten Fensters (CTkToplevel) wird ein Frame per place()
+        über den GESAMTEN Inhalt des Hauptfensters gelegt. So kann der
+        Window-Manager es nicht als eigenes Fenster positionieren (Wayland/
+        Hyprland) und es blockiert alle darunterliegenden Steuerelemente.
+        """
         self._overlay_open = True
-        top = ctk.CTkToplevel(self)
-        top.title("")
-        top.geometry("360x200")
-        top.resizable(False, False)
-        top.configure(fg_color=BG_CARD)
-        try:
-            top.transient(self)
-            top.grab_set()  # blockiert alle anderen Steuerelemente
-            top.attributes("-topmost", True)
-        except Exception:
-            pass
+        # Mit CTkFrame als Kind von self; korbbont alle Kinder, liegt dank
+        # place() + lift() über dem gesamten pack()/grid()-Inhalt.
+        ov = ctk.CTkFrame(
+            self, fg_color=BG_CARD, corner_radius=0,
+        )
+        ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+        ov.lift()  # garantiert oberste z-Reihenfolge
 
         # Spinner-Label (Animations-String wird per after() rotiert)
         self._overlay_spinner = ctk.CTkLabel(
-            top, text="", font=("Segoe UI", 42),
-            text_color=ACCENT, width=90, height=70,
+            ov, text="", font=("Segoe UI", 44),
+            text_color=ACCENT, width=100, height=74,
         )
-        self._overlay_spinner.pack(pady=(18, 4))
+        self._overlay_spinner.place(relx=0.5, rely=0.42, anchor="center")
         self._overlay_phase = ctk.CTkLabel(
-            top, text=phase, font=self._font_body,
+            ov, text=phase, font=self._font_body,
             text_color=TEXT_MAIN, anchor="center",
+            justify="left", wraplength=560,
         )
-        self._overlay_phase.pack(pady=(0, 2))
+        self._overlay_phase.place(relx=0.5, rely=0.62, anchor="center")
 
-        self._overlay_top = top
+        self._overlay_top = ov
         self._overlay_spin_i = 0
         self._overlay_after = None
         self._spin_chars = ["⚙ ", "⟳", "◒", "… ", "●"]
@@ -837,11 +840,11 @@ class MainWindow(ctk.CTk):
         self.after(3000, self._close_overlay)
 
     def _close_overlay(self):
-        """Schließt das Overlay und hebt die Sperre auf."""
+        """Schließt das Overlay und gibt die Steuerelemente wieder frei."""
         if not getattr(self, "_overlay_open", False):
             return
         try:
-            self._overlay_top.grab_release()
+            self._overlay_top.place_forget()  # aus der Überlagerung nehmen
             self._overlay_top.destroy()
         except Exception:
             pass
