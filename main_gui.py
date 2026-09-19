@@ -71,16 +71,40 @@ def _asset_path(name: str) -> str:
 def open_in_file_manager(path: str) -> bool:
     """Öffnet einen Ordner im nativen Dateimanager (Win/Linux/macOS).
 
-    Gibt True zurück, falls der Öffnungs-Befehl gestartet werden konnte.
+    Gibt True zurück, falls ein Öffnungs-Befehl gestartet werden konnte.
+    Auf Linux wird zuerst der systemweite Dateimanager über das Desktop-Portal
+    (gio open) versucht, dann xdg-open, dann ein bekannter Dateimanager.
     """
     try:
         if sys.platform.startswith("win"):
             os.startfile(path)  # Windows: nativer Explorer
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])  # macOS
-        else:
-            subprocess.Popen(["xdg-open", path])  # Linux
-        return True
+            return True
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+            return True
+
+        # Linux: mehrere Strategien, damit es auch auf Wayland/Hyprland öffnet.
+        strategies = [
+            ["gio", "open", path],
+            ["xdg-open", path],
+            ["nautilus", path],
+            ["dolphin", path],
+            ["thunar", path],
+        ]
+        for cmd in strategies:
+            try:
+                p = subprocess.Popen(cmd, start_new_session=True)
+                # kurz warten, ob der Prozess sofort scheitert (exit != 0)
+                try:
+                    rc = p.wait(timeout=0.6)
+                    if rc != 0:
+                        continue  # dieser Öffner schlug fehl → nächster
+                except subprocess.TimeoutExpired:
+                    return True  # läuft → Erfolg
+                return True
+            except Exception:
+                continue
+        return False
     except Exception:
         return False
 
@@ -494,9 +518,9 @@ class MainWindow(ctk.CTk):
         (Testbar: in Tests per mock.patch patchen.)
         """
         return messagebox.askyesno(
-            self,
             "Datei existiert",
             f"'{name}' existiert bereits im INI-Ordner.\nÜberschreiben?",
+            parent=self,
         )
 
     # =============================================================== Sektion 3
@@ -575,8 +599,12 @@ class MainWindow(ctk.CTk):
             self._version_menu.set(values[0])
             version = values[0]
 
-        # _data_p4k + Build anhand der wiederhergestellten Auswahl setzen
-        if version == CUSTOM_PATH_LABEL and path and os.path.isdir(path):
+        # _data_p4k + Build anhand der wiederhergestellten Auswahl setzen.
+        # Fällt zurück auf den zuerst automatisch erkannten Kanal, wenn der
+        # gespeicherte "Eigener Pfad" nicht (mehr) existiert — z.B. nach einem
+        # Wechsel Windows→Linux, wo ein Windows-Pfad auf Linux tot ist.
+        if version == CUSTOM_PATH_LABEL and path and os.path.isdir(path) \
+                and os.path.isfile(os.path.join(path, "Data.p4k")):
             self._custom_folder = path
             self._data_p4k = os.path.join(path, "Data.p4k")
             try:
@@ -590,6 +618,16 @@ class MainWindow(ctk.CTk):
                 self._custom_folder = None
                 self._data_p4k = v.data_p4k
                 self._build_entry.insert(0, v.build_number)
+            elif self._version_map:
+                # Gespeicherter Verweis ist ungueltig/tot → erste erkannte Version
+                fallback = next(iter(self._version_map.values()))
+                if version != CUSTOM_PATH_LABEL:
+                    self._version_menu.set(
+                        f"{fallback.channel} — {fallback.build_number}"
+                    )
+                self._custom_folder = None
+                self._data_p4k = fallback.data_p4k
+                self._build_entry.insert(0, fallback.build_number)
 
         # Gespeicherte Auswahl NUR anwenden, wenn sie nicht leer ist
         # (sonst Standard beim Erststart: ALLE angehakt)
@@ -622,11 +660,11 @@ class MainWindow(ctk.CTk):
             data_p4k = getattr(self, "_data_p4k", None)
             if not data_p4k or not os.path.isfile(data_p4k):
                 messagebox.showwarning(
-                    self,
                     "Data.p4k fehlt",
                     "Keine Data.p4k gefunden.\nBitte wähle einen gültigen "
                     "Kanal im Dropdown oder einen eigenen Channel-Ordner "
                     "über 'Eigener Pfad...'.",
+                    parent=self,
                 )
                 self._set_status("Fehler: Data.p4k fehlt", error=True)
                 return
@@ -660,32 +698,43 @@ class MainWindow(ctk.CTk):
             # 6. Erfolg
             self._set_status(f"Fertig — {replaced} Werte ersetzt (Gesamt: {total} Zeilen)")
             messagebox.showinfo(
-                self,
-                "Fertig",
-                f"Output/global.ini wurde erstellt.\n\n"
-                f"Ersetzte Werte: {replaced}\n"
-                f"Zeilen gesamt: {total}\n"
-                f"Mod-Dateien: {len(selected_inis)}\n"
-                f"Pfad: {out_path}",
-            )
+                    "Fertig",
+                    f"Output/global.ini wurde erstellt.\n\n"
+                    f"Ersetzte Werte: {replaced}\n"
+                    f"Zeilen gesamt: {total}\n"
+                    f"Mod-Dateien: {len(selected_inis)}\n"
+                    f"Pfad: {out_path}",
+                    parent=self,
+                )
 
         except FileNotFoundError as exc:
             self._handle_error(f"Datei nicht gefunden:\n{exc}")
         except Exception as exc:
-            self._handle_error(f"Unerwarteter Fehler:\n{exc}", detail=True)
+            self._handle_error(f"Unerwarteter Fehler: {exc}", detail=True)
         finally:
             self._merge_btn.configure(state="normal")
 
     def _handle_error(self, msg: str, detail: bool = False):
-        """Fehlermeldung in der Statusleiste zeigen + stderr loggen."""
+        """Fehlermeldung in der Statusleiste zeigen + in Logdatei schreiben."""
         if detail:
             msg = f"{msg}\n{traceback.format_exc()}"
-        # Konkreten Fehlertext in die Statusleiste statt nur "Fehler!"
-        self._set_status(f"Fehler: {msg.splitlines()[0]}", error=True)
+        # Konkreten Fehlertext zeigen: letzte aussagekraefige Zeile statt "Fehler!"
+        head = msg.splitlines()[0] if msg.splitlines() else msg
+        self._set_status(f"Fehler: {head}", error=True)
+        # Vollen Traceback in eine Logdatei schreiben (fuer Diagnose)
+        try:
+            logp = os.path.join(str(app_dirs.get_data_dir()), "error.log")
+            with open(logp, "a", encoding="utf-8") as fh:
+                fh.write("=" * 60 + "\n")
+                fh.write(msg + "\n")
+        except Exception:
+            pass
         print(f"[SC-Merger] {msg}", file=sys.stderr)
-        # Popup nur bei detail (Stack-Trace) — bei Kurzmeldung reicht die Statusleiste
-        if detail:
-            messagebox.showerror(self, "Fehler", msg)
+        # Popup: volle Fehlermeldung zeigen (Nutzer sieht die Ursache direkt)
+        try:
+            messagebox.showerror("Fehler", msg, parent=self)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
