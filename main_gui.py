@@ -476,36 +476,23 @@ class MainWindow(QMainWindow):
         fan_label = QLabel("Unofficial fan project")
         fan_label.setObjectName("section")
 
-        # Sektionen
+        # Sektionen (Farbe DIREKT am Label gesetzt — Selektor #section greift nicht zuverlaessig)
         s1 = QLabel("1. Star Citizen Version")
         s1.setObjectName("section")
+        s1.setStyleSheet("color:#C8102E;font-weight:bold;font-size:13px;"
+                         "padding-top:8px;padding-bottom:4px;border-bottom:1px solid #333333;")
         s2 = QLabel("2. Mod-Auswahl")
         s2.setObjectName("section")
+        s2.setStyleSheet("color:#C8102E;font-weight:bold;font-size:13px;"
+                         "padding-top:8px;padding-bottom:4px;border-bottom:1px solid #333333;")
         s3 = QLabel("3. Output & Aktion")
         s3.setObjectName("section")
+        s3.setStyleSheet("color:#C8102E;font-weight:bold;font-size:13px;"
+                         "padding-top:8px;padding-bottom:4px;border-bottom:1px solid #333333;")
 
-        # QGroupBox-Styling (zweiter Weg über Stylesheet)
-        self.setStyleSheet(
-            _QSS
-            + """
-QGroupBox {
-    background-color: #252526;
-    border: 1px solid #333333;
-    border-radius: 4px;
-    margin-top: 8px;
-    padding-top: 12px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 12px;
-    padding: 0 6px;
-    color: #C8102E;
-    font-size: 12px;
-    font-weight: bold;
-}
-"""
-        )
+        # Hauptlayout anwenden (kein doppeltes setStyleSheet mehr nötig —
+        # Styles liegen global in _QSS bzw. direkt an den Labels)
+        self.setStyleSheet(_QSS)
 
         main = QVBoxLayout()
         main.setSpacing(12)
