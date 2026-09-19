@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStatusBar,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -420,8 +421,13 @@ class MainWindow(QMainWindow):
 
     def _build_reload_button(self):
         """Kleiner Reload-Button über der Mod-Liste (Neu einlesen des ini/-Ordners)."""
-        btn = QPushButton("⟳")
+        btn = QPushButton("")
         btn.setFixedSize(30, 26)
+        # System-Icon (garantiert gerendert, unabhängig von verfügbaren Fonts)
+        icon = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_BrowserReload
+        )
+        btn.setIcon(icon)
         btn.setToolTip(
             "Mod-Liste neu laden — prüft den ini/-Ordner auf neue/entfernte Dateien"
         )
