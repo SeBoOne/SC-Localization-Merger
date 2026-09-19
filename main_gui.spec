@@ -16,6 +16,8 @@ import sys as _sys
 # Versteckte Imports für Module der App
 hiddenimports = [
     'customtkinter',
+    'PIL',
+    'PIL.Image',
     'merge',
     'p4k_reader',
     'extract_global',
@@ -40,8 +42,8 @@ if _sys.platform != "win32":
         if _src.exists():
             binaries.append((str(_src), "."))
 
-# --- Daten-Dateien: keine zusätzlichen Daten ---
-datas = []
+# --- Daten-Dateien: mitgelieferte Asset-Dateien (Reload-Icon) ---
+datas = [("assets/reload_icon.png", "assets")]
 
 # --- Eingabe: Hauptskript ---
 a = Analysis(

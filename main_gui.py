@@ -25,6 +25,8 @@ import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+from PIL import Image  # Reload-Icon rendern
+
 import customtkinter as ctk
 
 # ---------------------------------------------------------------------------
@@ -51,6 +53,16 @@ TEXT_DIM = "#9A9A9A"          # Sekundärtext (Hinweise, Output-Pfad)
 ERROR_RED = "#FF5C5C"         # Fehler in der Statusleiste
 
 CUSTOM_PATH_LABEL = "Eigener Pfad..."  # Label im Versions-Dropdown für eigenen Pfad
+
+
+def _asset_path(name: str) -> str:
+    """Pfad zu einer mitgelieferten Asset-Datei (frozen-sicher).
+
+    Im PyInstaller-Bundle liegen Assets im _MEIPASS-Verzeichnis; im Source-Lauf
+    relativ zum Skript unter assets/.
+    """
+    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, "assets", name)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +117,9 @@ class MainWindow(ctk.CTk):
         self._font_body = ctk.CTkFont(size=14)
         self._font_small = ctk.CTkFont(size=12)
         self._font_button = ctk.CTkFont(size=14, weight="bold")
+        # Eigene, groessere Font fuer das Reload-Symbol — sonst wirkt das ⟳-
+        # Glyph mit der Button-Font (14) sehr schmal/duenn.
+        self._font_reload = ctk.CTkFont(size=22, weight="bold")
 
         # ---------------------------------------------------------- App-Pfade
         self._ini_dir = str(app_dirs.get_ini_dir())
@@ -274,12 +289,21 @@ class MainWindow(ctk.CTk):
             font=self._font_section, text_color=ACCENT, anchor="w",
         ).grid(row=0, column=0, sticky="w")
 
-        # Kleiner Reload-Button rechts (⟳) — liest den ini/-Ordner neu ein,
+        # Kleiner Reload-Button rechts (Bild-Icon) — liest den ini/-Ordner neu ein,
         # ohne den Checkstand der vorhandenen Einträge zu verlieren.
+        # Bild statt Unicode-Glyph: ⟳/↻ wird je nach Systemfont duenn gerendert;
+        # ein PNG rendert identisch und deutlich sichtbar.
+        _reload_path = _asset_path("reload_icon.png")
+        with open(_reload_path, "rb") as _f:
+            _reload_img = Image.open(_f).copy()
+        reload_icon = ctk.CTkImage(
+            light_image=_reload_img,
+            dark_image=_reload_img,
+            size=(24, 24),
+        )
         self._reload_btn = ctk.CTkButton(
-            header_row, text="⟳", width=34, height=30,
-            font=self._font_button, fg_color=BG_CARD,
-            hover_color=BG_NEUTRAL_HOVER, text_color=ACCENT,
+            header_row, text="", image=reload_icon, width=44, height=34,
+            fg_color=BG_CARD, hover_color=BG_NEUTRAL_HOVER,
             command=self.reload_mod_list,
         )
         self._reload_btn.grid(row=0, column=1, sticky="e")
