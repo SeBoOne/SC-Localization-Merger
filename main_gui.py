@@ -402,7 +402,7 @@ class MainWindow(QMainWindow):
 
     def _build_merge_button(self):
         """QPushButton „Extract & Merge"."""
-        btn = QPushButton("Extract & Merge")
+        btn = QPushButton("Extract && Merge")
         btn.setMinimumHeight(40)
         btn.setMinimumWidth(220)
         btn.setObjectName("primary_btn")
