@@ -15,6 +15,7 @@ tmp_global_base.ini
 global.ini
 Data.p4k
 *.p4k
+IDEA.md
 
 # PyInstaller-Output
 build/
